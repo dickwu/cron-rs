@@ -135,7 +135,7 @@ async fn t40_cascade_deletes() {
     let hook = Hook {
         id: String::new(),
         task_id: created_task.id.clone(),
-        hook_type: HookType::OnFailure,
+        hook_type: HookType::Failure,
         command: "echo fail".to_string(),
         timeout_secs: None,
         run_order: 0,
@@ -341,7 +341,7 @@ async fn hook_crud_create() {
     let hook = Hook {
         id: String::new(),
         task_id: task.id.clone(),
-        hook_type: HookType::OnFailure,
+        hook_type: HookType::Failure,
         command: "curl -X POST http://alert".to_string(),
         timeout_secs: Some(30),
         run_order: 1,
@@ -351,7 +351,7 @@ async fn hook_crud_create() {
     let created = db::hooks::create(&conn, &hook).await.unwrap();
     assert!(!created.id.is_empty());
     assert_eq!(created.task_id, task.id);
-    assert_eq!(created.hook_type, HookType::OnFailure);
+    assert_eq!(created.hook_type, HookType::Failure);
     assert_eq!(created.command, "curl -X POST http://alert");
     assert_eq!(created.timeout_secs, Some(30));
     assert_eq!(created.run_order, 1);
@@ -374,7 +374,7 @@ async fn hook_crud_list_for_task() {
         let hook = Hook {
             id: String::new(),
             task_id: task.id.clone(),
-            hook_type: HookType::OnFailure,
+            hook_type: HookType::Failure,
             command: format!("echo hook_{}", i),
             timeout_secs: None,
             run_order: i,
@@ -404,7 +404,7 @@ async fn hook_crud_get_by_type() {
         .unwrap();
 
     // Create hooks of different types
-    for (i, hook_type) in [HookType::OnFailure, HookType::OnSuccess, HookType::OnRetryExhausted].iter().enumerate() {
+    for (i, hook_type) in [HookType::Failure, HookType::Success, HookType::RetryExhausted].iter().enumerate() {
         let hook = Hook {
             id: String::new(),
             task_id: task.id.clone(),
@@ -417,13 +417,13 @@ async fn hook_crud_get_by_type() {
         db::hooks::create(&conn, &hook).await.unwrap();
     }
 
-    let failure_hooks = db::hooks::get_by_type(&conn, &task.id, &HookType::OnFailure)
+    let failure_hooks = db::hooks::get_by_type(&conn, &task.id, &HookType::Failure)
         .await
         .unwrap();
     assert_eq!(failure_hooks.len(), 1);
-    assert_eq!(failure_hooks[0].hook_type, HookType::OnFailure);
+    assert_eq!(failure_hooks[0].hook_type, HookType::Failure);
 
-    let success_hooks = db::hooks::get_by_type(&conn, &task.id, &HookType::OnSuccess)
+    let success_hooks = db::hooks::get_by_type(&conn, &task.id, &HookType::Success)
         .await
         .unwrap();
     assert_eq!(success_hooks.len(), 1);
@@ -444,7 +444,7 @@ async fn hook_crud_delete() {
     let hook = Hook {
         id: String::new(),
         task_id: task.id.clone(),
-        hook_type: HookType::OnSuccess,
+        hook_type: HookType::Success,
         command: "echo done".to_string(),
         timeout_secs: None,
         run_order: 0,

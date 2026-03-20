@@ -2,19 +2,21 @@ use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
 pub enum HookType {
-    OnFailure,
-    OnSuccess,
-    OnRetryExhausted,
+    #[serde(rename = "on_failure")]
+    Failure,
+    #[serde(rename = "on_success")]
+    Success,
+    #[serde(rename = "on_retry_exhausted")]
+    RetryExhausted,
 }
 
 impl std::fmt::Display for HookType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            HookType::OnFailure => write!(f, "on_failure"),
-            HookType::OnSuccess => write!(f, "on_success"),
-            HookType::OnRetryExhausted => write!(f, "on_retry_exhausted"),
+            HookType::Failure => write!(f, "on_failure"),
+            HookType::Success => write!(f, "on_success"),
+            HookType::RetryExhausted => write!(f, "on_retry_exhausted"),
         }
     }
 }
@@ -24,9 +26,9 @@ impl FromStr for HookType {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "on_failure" => Ok(HookType::OnFailure),
-            "on_success" => Ok(HookType::OnSuccess),
-            "on_retry_exhausted" => Ok(HookType::OnRetryExhausted),
+            "on_failure" => Ok(HookType::Failure),
+            "on_success" => Ok(HookType::Success),
+            "on_retry_exhausted" => Ok(HookType::RetryExhausted),
             other => Err(format!("unknown hook type: {}", other)),
         }
     }

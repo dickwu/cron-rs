@@ -192,7 +192,7 @@ pub async fn run_task(task_id: &str, task_name: &str, db_path: &str) -> anyhow::
                     }
 
                     // Run on_failure hooks
-                    run_hooks_by_type(&conn, &task.id, &job_run.id, HookType::OnFailure, db_path, task_name).await;
+                    run_hooks_by_type(&conn, &task.id, &job_run.id, HookType::Failure, db_path, task_name).await;
 
                     return Ok(1);
                 } else if cmd_result.exit_code == 0 {
@@ -211,7 +211,7 @@ pub async fn run_task(task_id: &str, task_name: &str, db_path: &str) -> anyhow::
                     }
 
                     // Run on_success hooks
-                    run_hooks_by_type(&conn, &task.id, &job_run.id, HookType::OnSuccess, db_path, task_name).await;
+                    run_hooks_by_type(&conn, &task.id, &job_run.id, HookType::Success, db_path, task_name).await;
 
                     return Ok(0);
                 } else {
@@ -258,10 +258,10 @@ pub async fn run_task(task_id: &str, task_name: &str, db_path: &str) -> anyhow::
                         }
 
                         // Run on_failure hooks
-                        run_hooks_by_type(&conn, &task.id, &job_run.id, HookType::OnFailure, db_path, task_name).await;
+                        run_hooks_by_type(&conn, &task.id, &job_run.id, HookType::Failure, db_path, task_name).await;
 
                         // Run on_retry_exhausted hooks
-                        run_hooks_by_type(&conn, &task.id, &job_run.id, HookType::OnRetryExhausted, db_path, task_name).await;
+                        run_hooks_by_type(&conn, &task.id, &job_run.id, HookType::RetryExhausted, db_path, task_name).await;
 
                         return Ok(1);
                     }
@@ -286,7 +286,7 @@ pub async fn run_task(task_id: &str, task_name: &str, db_path: &str) -> anyhow::
                 }
 
                 // Run on_failure hooks
-                run_hooks_by_type(&conn, &task.id, &job_run.id, HookType::OnFailure, db_path, task_name).await;
+                run_hooks_by_type(&conn, &task.id, &job_run.id, HookType::Failure, db_path, task_name).await;
 
                 return Ok(1);
             }
