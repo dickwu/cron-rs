@@ -105,9 +105,8 @@ async fn status(State(state): State<AppState>) -> impl IntoResponse {
             let mut count = 0u64;
             for task in &tasks {
                 if task.enabled {
-                    match state.systemd.is_timer_active(&task.name).await {
-                        Ok(true) => count += 1,
-                        _ => {}
+                    if let Ok(true) = state.systemd.is_timer_active(&task.name).await {
+                        count += 1;
                     }
                 }
             }
