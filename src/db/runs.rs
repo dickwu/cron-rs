@@ -172,6 +172,7 @@ pub async fn update_job_run(conn: &Connection, run: &JobRun) -> Result<(), DbErr
 }
 
 /// Get all running runs for a given task (for concurrency checks).
+#[allow(dead_code)]
 pub async fn get_running_runs_for_task(
     conn: &Connection,
     task_id: &str,
@@ -278,6 +279,7 @@ pub async fn update_hook_run(conn: &Connection, run: &HookRun) -> Result<(), DbE
 }
 
 /// List all hook runs for a given job run.
+#[allow(dead_code)]
 pub async fn list_hook_runs(conn: &Connection, job_run_id: &str) -> Result<Vec<HookRun>, DbError> {
     let mut rows = conn
         .query(

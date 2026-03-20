@@ -15,6 +15,7 @@ pub struct LoginRequest {
     pub password: String,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize)]
 pub struct LoginResponse {
     pub token: String,

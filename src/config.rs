@@ -9,6 +9,7 @@ pub struct Config {
     pub port: u16,
     pub db_path: PathBuf,
     pub token_expiry: String,
+    #[allow(dead_code)]
     pub config_dir: PathBuf,
 }
 

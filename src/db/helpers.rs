@@ -15,6 +15,7 @@ pub enum DbError {
     Conflict(String),
 
     #[error("Connection error: {0}")]
+    #[allow(dead_code)]
     ConnectionError(String),
 
     #[error("Query error: {0}")]

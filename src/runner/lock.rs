@@ -109,6 +109,7 @@ pub fn try_acquire_lock(lock_dir: &Path, task_id: &str) -> anyhow::Result<Option
 
 /// Check if a lock is currently held by another process.
 /// Returns true if the lock is held (i.e., a non-blocking acquire would fail).
+#[allow(dead_code)]
 pub fn is_lock_held(lock_dir: &Path, task_id: &str) -> bool {
     match try_acquire_lock(lock_dir, task_id) {
         Ok(Some(_guard)) => {

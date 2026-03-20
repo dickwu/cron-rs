@@ -29,12 +29,14 @@ pub fn service_filename(task_name: &str) -> String {
 }
 
 /// Generate the content of a systemd .timer unit file for the given task.
+#[allow(dead_code)]
 pub fn generate_timer_unit(task: &Task) -> String {
     generate_timer(&task.name, &task.schedule)
 }
 
 /// Generate the content of a systemd .service unit file for the given task.
 /// The service calls `cron-rs run --task-id <id> --task-name <name> --db-path <path>`.
+#[allow(dead_code)]
 pub fn generate_service_unit(task: &Task, db_path: &str) -> String {
     let binary_path = std::env::current_exe()
         .unwrap_or_else(|_| std::path::PathBuf::from("cron-rs"))
