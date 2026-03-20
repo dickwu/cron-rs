@@ -150,8 +150,8 @@ fn print_task_table(tasks: &[serde_json::Value]) {
     }
 
     println!(
-        "{:<36}  {:<20}  {:<8}  {:<25}  {}",
-        "ID", "NAME", "ENABLED", "SCHEDULE", "COMMAND"
+        "{:<36}  {:<20}  {:<8}  {:<25}  COMMAND",
+        "ID", "NAME", "ENABLED", "SCHEDULE"
     );
     println!("{}", "-".repeat(120));
 

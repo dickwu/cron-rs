@@ -144,8 +144,8 @@ fn print_hook_table(hooks: &[serde_json::Value]) {
     }
 
     println!(
-        "{:<36}  {:<20}  {:<10}  {:<10}  {}",
-        "ID", "TYPE", "ORDER", "TIMEOUT", "COMMAND"
+        "{:<36}  {:<20}  {:<10}  {:<10}  COMMAND",
+        "ID", "TYPE", "ORDER", "TIMEOUT"
     );
     println!("{}", "-".repeat(110));
 
