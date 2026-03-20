@@ -1,0 +1,132 @@
+use crate::db::helpers::{now_timestamp, new_uuid, DbError, FromRow};
+use crate::models::{Hook, HookType};
+use libsql::Connection;
+
+/// Insert a new hook into the database.
+/// Generates an id and created_at if they are empty.
+pub async fn create(conn: &Connection, hook: &Hook) -> Result<Hook, DbError> {
+    let id = if hook.id.is_empty() { new_uuid() } else { hook.id.clone() };
+    let now = now_timestamp();
+    let created_at = if hook.created_at.is_empty() { now } else { hook.created_at.clone() };
+
+    let timeout_val: libsql::Value = match hook.timeout_secs {
+        Some(v) => libsql::Value::Integer(v as i64),
+        None => libsql::Value::Null,
+    };
+
+    conn.execute(
+        "INSERT INTO hooks (id, task_id, hook_type, command, timeout_secs, run_order, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        libsql::params![
+            id.clone(),
+            hook.task_id.clone(),
+            hook.hook_type.to_string(),
+            hook.command.clone(),
+            timeout_val,
+            hook.run_order,
+            created_at
+        ],
+    )
+    .await?;
+
+    get_by_id(conn, &id).await
+}
+
+/// Get a hook by its id.
+pub async fn get_by_id(conn: &Connection, id: &str) -> Result<Hook, DbError> {
+    let mut rows = conn
+        .query(
+            "SELECT id, task_id, hook_type, command, timeout_secs, run_order, created_at
+             FROM hooks WHERE id = ?1",
+            [id],
+        )
+        .await?;
+
+    match rows.next().await? {
+        Some(row) => Hook::from_row(&row),
+        None => Err(DbError::NotFound),
+    }
+}
+
+/// List all hooks for a task, ordered by run_order.
+pub async fn list_for_task(conn: &Connection, task_id: &str) -> Result<Vec<Hook>, DbError> {
+    let mut rows = conn
+        .query(
+            "SELECT id, task_id, hook_type, command, timeout_secs, run_order, created_at
+             FROM hooks WHERE task_id = ?1 ORDER BY run_order",
+            [task_id],
+        )
+        .await?;
+
+    let mut hooks = Vec::new();
+    while let Some(row) = rows.next().await? {
+        hooks.push(Hook::from_row(&row)?);
+    }
+    Ok(hooks)
+}
+
+/// Get hooks for a task filtered by hook type, ordered by run_order.
+pub async fn get_by_type(
+    conn: &Connection,
+    task_id: &str,
+    hook_type: &HookType,
+) -> Result<Vec<Hook>, DbError> {
+    let mut rows = conn
+        .query(
+            "SELECT id, task_id, hook_type, command, timeout_secs, run_order, created_at
+             FROM hooks WHERE task_id = ?1 AND hook_type = ?2 ORDER BY run_order",
+            libsql::params![task_id.to_string(), hook_type.to_string()],
+        )
+        .await?;
+
+    let mut hooks = Vec::new();
+    while let Some(row) = rows.next().await? {
+        hooks.push(Hook::from_row(&row)?);
+    }
+    Ok(hooks)
+}
+
+/// Update an existing hook. Returns the updated hook.
+pub async fn update(conn: &Connection, hook: &Hook) -> Result<Hook, DbError> {
+    let timeout_val: libsql::Value = match hook.timeout_secs {
+        Some(v) => libsql::Value::Integer(v as i64),
+        None => libsql::Value::Null,
+    };
+
+    let rows_changed = conn
+        .execute(
+            "UPDATE hooks SET
+                hook_type = ?2,
+                command = ?3,
+                timeout_secs = ?4,
+                run_order = ?5
+             WHERE id = ?1",
+            libsql::params![
+                hook.id.clone(),
+                hook.hook_type.to_string(),
+                hook.command.clone(),
+                timeout_val,
+                hook.run_order
+            ],
+        )
+        .await?;
+
+    if rows_changed == 0 {
+        return Err(DbError::NotFound);
+    }
+
+    get_by_id(conn, &hook.id).await
+}
+
+/// Delete a hook by id.
+pub async fn delete(conn: &Connection, id: &str) -> Result<(), DbError> {
+    let rows_changed = conn
+        .execute("DELETE FROM hooks WHERE id = ?1", [id])
+        .await?;
+
+    if rows_changed == 0 {
+        return Err(DbError::NotFound);
+    }
+
+    Ok(())
+}
