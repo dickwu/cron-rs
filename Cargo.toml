@@ -26,8 +26,18 @@ libc = "0.2"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rand = "0.8"
 hex = "0.4"
+http-body-util = "0.1"
+rust-embed = { version = "8", optional = true }
+notify = "6"
+mime_guess = "2"
+tokio-stream = { version = "0.1", features = ["sync"] }
+
+[features]
+default = []
+embed-web = ["rust-embed"]
 
 [dev-dependencies]
+ts-rs = "10"
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 tempfile = "3"
