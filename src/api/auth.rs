@@ -90,12 +90,12 @@ pub async fn login(
 /// Parse an expiry string like "24h", "1h", "30m", "3600s" into seconds.
 fn parse_expiry(s: &str) -> Option<usize> {
     let s = s.trim();
-    if s.ends_with('h') {
-        s[..s.len() - 1].parse::<usize>().ok().map(|h| h * 3600)
-    } else if s.ends_with('m') {
-        s[..s.len() - 1].parse::<usize>().ok().map(|m| m * 60)
-    } else if s.ends_with('s') {
-        s[..s.len() - 1].parse::<usize>().ok()
+    if let Some(stripped) = s.strip_suffix('h') {
+        stripped.parse::<usize>().ok().map(|h| h * 3600)
+    } else if let Some(stripped) = s.strip_suffix('m') {
+        stripped.parse::<usize>().ok().map(|m| m * 60)
+    } else if let Some(stripped) = s.strip_suffix('s') {
+        stripped.parse::<usize>().ok()
     } else {
         s.parse::<usize>().ok()
     }
