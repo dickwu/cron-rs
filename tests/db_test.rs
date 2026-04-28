@@ -2,8 +2,8 @@ use std::path::PathBuf;
 
 use cron_rs::db;
 use cron_rs::db::helpers::DbError;
-use cron_rs::models::*;
 use cron_rs::models::task::ConcurrencyPolicy;
+use cron_rs::models::*;
 
 /// Create a temp DB path with a unique name.
 fn temp_db_path() -> PathBuf {
@@ -14,8 +14,13 @@ fn temp_db_path() -> PathBuf {
 /// Create and initialize a fresh test database.
 async fn setup_db() -> (db::Database, PathBuf) {
     let path = temp_db_path();
-    let database = db::Database::new(&path).await.expect("Failed to create database");
-    database.run_migrations().await.expect("Failed to run migrations");
+    let database = db::Database::new(&path)
+        .await
+        .expect("Failed to create database");
+    database
+        .run_migrations()
+        .await
+        .expect("Failed to run migrations");
     (database, path)
 }
 
@@ -33,6 +38,7 @@ fn make_test_task(name: &str, command: &str) -> Task {
         name: name.to_string(),
         command: command.to_string(),
         schedule: "*-*-* *:00:00".to_string(),
+        tags: Vec::new(),
         description: "test task".to_string(),
         enabled: true,
         max_retries: 0,
@@ -96,10 +102,16 @@ async fn t37_migrations_are_idempotent() {
     let database = db::Database::new(&path).await.unwrap();
 
     // First run
-    database.run_migrations().await.expect("First migration should succeed");
+    database
+        .run_migrations()
+        .await
+        .expect("First migration should succeed");
 
     // Second run — should not fail
-    database.run_migrations().await.expect("Second migration should succeed (idempotent)");
+    database
+        .run_migrations()
+        .await
+        .expect("Second migration should succeed (idempotent)");
 
     cleanup_db(&path);
 }
@@ -176,7 +188,9 @@ async fn t40_cascade_deletes() {
     db::tasks::delete(&conn, &created_task.id).await.unwrap();
 
     // Verify hooks are deleted
-    let hooks = db::hooks::list_for_task(&conn, &created_task.id).await.unwrap();
+    let hooks = db::hooks::list_for_task(&conn, &created_task.id)
+        .await
+        .unwrap();
     assert!(hooks.is_empty(), "Hooks should be deleted by CASCADE");
 
     // Verify job runs are deleted
@@ -258,8 +272,12 @@ async fn task_crud_list() {
     assert!(tasks.is_empty());
 
     // Create two tasks
-    db::tasks::create(&conn, &make_test_task("alpha", "echo a")).await.unwrap();
-    db::tasks::create(&conn, &make_test_task("beta", "echo b")).await.unwrap();
+    db::tasks::create(&conn, &make_test_task("alpha", "echo a"))
+        .await
+        .unwrap();
+    db::tasks::create(&conn, &make_test_task("beta", "echo b"))
+        .await
+        .unwrap();
 
     let tasks = db::tasks::list(&conn).await.unwrap();
     assert_eq!(tasks.len(), 2);
@@ -404,7 +422,14 @@ async fn hook_crud_get_by_type() {
         .unwrap();
 
     // Create hooks of different types
-    for (i, hook_type) in [HookType::Failure, HookType::Success, HookType::RetryExhausted].iter().enumerate() {
+    for (i, hook_type) in [
+        HookType::Failure,
+        HookType::Success,
+        HookType::RetryExhausted,
+    ]
+    .iter()
+    .enumerate()
+    {
         let hook = Hook {
             id: String::new(),
             task_id: task.id.clone(),
@@ -529,7 +554,9 @@ async fn run_crud_update_job_run() {
 
     db::runs::update_job_run(&conn, &created).await.unwrap();
 
-    let fetched = db::runs::get_job_run_by_id(&conn, &created.id).await.unwrap();
+    let fetched = db::runs::get_job_run_by_id(&conn, &created.id)
+        .await
+        .unwrap();
     assert_eq!(fetched.status, JobRunStatus::Success);
     assert_eq!(fetched.exit_code, Some(0));
     assert_eq!(fetched.stdout, "hello world");
@@ -584,7 +611,9 @@ async fn run_crud_list_with_filters() {
     db::runs::create_job_run(&conn, &run).await.unwrap();
 
     // All runs
-    let all = db::runs::list_job_runs(&conn, None, None, None, None).await.unwrap();
+    let all = db::runs::list_job_runs(&conn, None, None, None, None)
+        .await
+        .unwrap();
     assert_eq!(all.len(), 3);
 
     // Filter by task_id
@@ -600,13 +629,16 @@ async fn run_crud_list_with_filters() {
     assert_eq!(failed_runs.len(), 1);
 
     // Filter by both
-    let task1_success = db::runs::list_job_runs(&conn, Some(&task1.id), Some("success"), None, None)
-        .await
-        .unwrap();
+    let task1_success =
+        db::runs::list_job_runs(&conn, Some(&task1.id), Some("success"), None, None)
+            .await
+            .unwrap();
     assert_eq!(task1_success.len(), 1);
 
     // Limit
-    let limited = db::runs::list_job_runs(&conn, None, None, Some(2), None).await.unwrap();
+    let limited = db::runs::list_job_runs(&conn, None, None, Some(2), None)
+        .await
+        .unwrap();
     assert_eq!(limited.len(), 2);
 
     cleanup_db(&path);
@@ -663,8 +695,14 @@ async fn run_crud_mark_orphaned_runs_crashed() {
         .await
         .unwrap();
 
-    let crashed = all_runs.iter().filter(|r| r.status == JobRunStatus::Crashed).count();
-    let success = all_runs.iter().filter(|r| r.status == JobRunStatus::Success).count();
+    let crashed = all_runs
+        .iter()
+        .filter(|r| r.status == JobRunStatus::Crashed)
+        .count();
+    let success = all_runs
+        .iter()
+        .filter(|r| r.status == JobRunStatus::Success)
+        .count();
     assert_eq!(crashed, 2, "Both running/retrying runs should be crashed");
     assert_eq!(success, 1, "Success run should be unchanged");
 

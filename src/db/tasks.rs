@@ -1,23 +1,41 @@
-use crate::db::helpers::{now_timestamp, new_uuid, DbError, FromRow};
+use crate::db::helpers::{new_uuid, now_timestamp, DbError, FromRow};
 use crate::models::Task;
 use libsql::Connection;
+
+fn tags_to_json(tags: &[String]) -> Result<String, DbError> {
+    serde_json::to_string(tags)
+        .map_err(|e| DbError::QueryError(format!("failed to encode task tags: {e}")))
+}
 
 /// Insert a new task into the database.
 /// Generates an id, created_at, and updated_at if they are empty.
 pub async fn create(conn: &Connection, task: &Task) -> Result<Task, DbError> {
-    let id = if task.id.is_empty() { new_uuid() } else { task.id.clone() };
+    let id = if task.id.is_empty() {
+        new_uuid()
+    } else {
+        task.id.clone()
+    };
     let now = now_timestamp();
-    let created_at = if task.created_at.is_empty() { now.clone() } else { task.created_at.clone() };
-    let updated_at = if task.updated_at.is_empty() { now } else { task.updated_at.clone() };
+    let created_at = if task.created_at.is_empty() {
+        now.clone()
+    } else {
+        task.created_at.clone()
+    };
+    let updated_at = if task.updated_at.is_empty() {
+        now
+    } else {
+        task.updated_at.clone()
+    };
 
     let timeout_val: libsql::Value = match task.timeout_secs {
         Some(v) => libsql::Value::Integer(v as i64),
         None => libsql::Value::Null,
     };
+    let tags_json = tags_to_json(&task.tags)?;
 
     conn.execute(
-        "INSERT INTO tasks (id, name, command, schedule, description, enabled, max_retries, retry_delay_secs, timeout_secs, concurrency_policy, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+        "INSERT INTO tasks (id, name, command, schedule, description, enabled, max_retries, retry_delay_secs, timeout_secs, concurrency_policy, created_at, updated_at, tags)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         libsql::params![
             id.clone(),
             task.name.clone(),
@@ -30,7 +48,8 @@ pub async fn create(conn: &Connection, task: &Task) -> Result<Task, DbError> {
             timeout_val,
             task.concurrency_policy.to_string(),
             created_at,
-            updated_at
+            updated_at,
+            tags_json
         ],
     )
     .await
@@ -49,7 +68,7 @@ pub async fn create(conn: &Connection, task: &Task) -> Result<Task, DbError> {
 pub async fn get_by_id(conn: &Connection, id: &str) -> Result<Task, DbError> {
     let mut rows = conn
         .query(
-            "SELECT id, name, command, schedule, description, enabled, max_retries, retry_delay_secs, timeout_secs, concurrency_policy, created_at, updated_at
+            "SELECT id, name, command, schedule, description, enabled, max_retries, retry_delay_secs, timeout_secs, concurrency_policy, created_at, updated_at, tags
              FROM tasks WHERE id = ?1",
             [id],
         )
@@ -65,7 +84,7 @@ pub async fn get_by_id(conn: &Connection, id: &str) -> Result<Task, DbError> {
 pub async fn get_by_name(conn: &Connection, name: &str) -> Result<Task, DbError> {
     let mut rows = conn
         .query(
-            "SELECT id, name, command, schedule, description, enabled, max_retries, retry_delay_secs, timeout_secs, concurrency_policy, created_at, updated_at
+            "SELECT id, name, command, schedule, description, enabled, max_retries, retry_delay_secs, timeout_secs, concurrency_policy, created_at, updated_at, tags
              FROM tasks WHERE name = ?1",
             [name],
         )
@@ -81,7 +100,7 @@ pub async fn get_by_name(conn: &Connection, name: &str) -> Result<Task, DbError>
 pub async fn list(conn: &Connection) -> Result<Vec<Task>, DbError> {
     let mut rows = conn
         .query(
-            "SELECT id, name, command, schedule, description, enabled, max_retries, retry_delay_secs, timeout_secs, concurrency_policy, created_at, updated_at
+            "SELECT id, name, command, schedule, description, enabled, max_retries, retry_delay_secs, timeout_secs, concurrency_policy, created_at, updated_at, tags
              FROM tasks ORDER BY name",
             (),
         )
@@ -102,6 +121,7 @@ pub async fn update(conn: &Connection, task: &Task) -> Result<Task, DbError> {
         Some(v) => libsql::Value::Integer(v as i64),
         None => libsql::Value::Null,
     };
+    let tags_json = tags_to_json(&task.tags)?;
 
     let rows_changed = conn
         .execute(
@@ -115,7 +135,8 @@ pub async fn update(conn: &Connection, task: &Task) -> Result<Task, DbError> {
                 retry_delay_secs = ?8,
                 timeout_secs = ?9,
                 concurrency_policy = ?10,
-                updated_at = ?11
+                updated_at = ?11,
+                tags = ?12
              WHERE id = ?1",
             libsql::params![
                 task.id.clone(),
@@ -128,7 +149,8 @@ pub async fn update(conn: &Connection, task: &Task) -> Result<Task, DbError> {
                 task.retry_delay_secs,
                 timeout_val,
                 task.concurrency_policy.to_string(),
-                now
+                now,
+                tags_json
             ],
         )
         .await

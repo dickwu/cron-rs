@@ -9,7 +9,7 @@ use tower::ServiceExt;
 use cron_rs::api;
 use cron_rs::config::Config;
 use cron_rs::db;
-use cron_rs::models::Task;
+use cron_rs::models::{HookRun, HookRunStatus, JobRun, JobRunStatus, Task};
 use cron_rs::systemd::SystemdManager;
 
 // --- MockSystemdManager ---
@@ -34,32 +34,50 @@ impl MockSystemdManager {
 #[async_trait::async_trait]
 impl SystemdManager for MockSystemdManager {
     async fn install_task(&self, task: &Task) -> anyhow::Result<()> {
-        self.calls.lock().unwrap().push(format!("install_task:{}", task.name));
+        self.calls
+            .lock()
+            .unwrap()
+            .push(format!("install_task:{}", task.name));
         Ok(())
     }
 
     async fn remove_task(&self, task_name: &str) -> anyhow::Result<()> {
-        self.calls.lock().unwrap().push(format!("remove_task:{}", task_name));
+        self.calls
+            .lock()
+            .unwrap()
+            .push(format!("remove_task:{}", task_name));
         Ok(())
     }
 
     async fn enable_timer(&self, task_name: &str) -> anyhow::Result<()> {
-        self.calls.lock().unwrap().push(format!("enable_timer:{}", task_name));
+        self.calls
+            .lock()
+            .unwrap()
+            .push(format!("enable_timer:{}", task_name));
         Ok(())
     }
 
     async fn disable_timer(&self, task_name: &str) -> anyhow::Result<()> {
-        self.calls.lock().unwrap().push(format!("disable_timer:{}", task_name));
+        self.calls
+            .lock()
+            .unwrap()
+            .push(format!("disable_timer:{}", task_name));
         Ok(())
     }
 
     async fn start_timer(&self, task_name: &str) -> anyhow::Result<()> {
-        self.calls.lock().unwrap().push(format!("start_timer:{}", task_name));
+        self.calls
+            .lock()
+            .unwrap()
+            .push(format!("start_timer:{}", task_name));
         Ok(())
     }
 
     async fn stop_timer(&self, task_name: &str) -> anyhow::Result<()> {
-        self.calls.lock().unwrap().push(format!("stop_timer:{}", task_name));
+        self.calls
+            .lock()
+            .unwrap()
+            .push(format!("stop_timer:{}", task_name));
         Ok(())
     }
 
@@ -69,7 +87,10 @@ impl SystemdManager for MockSystemdManager {
     }
 
     async fn is_timer_active(&self, task_name: &str) -> anyhow::Result<bool> {
-        self.calls.lock().unwrap().push(format!("is_timer_active:{}", task_name));
+        self.calls
+            .lock()
+            .unwrap()
+            .push(format!("is_timer_active:{}", task_name));
         Ok(true)
     }
 }
@@ -164,6 +185,80 @@ fn auth_header(token: &str) -> String {
 
 // --- Tests ---
 
+#[tokio::test]
+async fn root_serves_management_page_fallback() {
+    let (app, path, _mock) = setup_app().await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(http::Method::GET)
+                .uri("/")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body = String::from_utf8(bytes.to_vec()).unwrap();
+    assert!(
+        body.contains("cron-rs"),
+        "root route should serve the management page or dashboard fallback"
+    );
+
+    cleanup_db(&path);
+}
+
+#[tokio::test]
+async fn runtime_config_uses_request_host_for_embedded_dashboard() {
+    let (app, path, _mock) = setup_app().await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(http::Method::GET)
+                .uri("/runtime-config.js")
+                .header(http::header::HOST, "10.101.0.18:9746")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body = String::from_utf8(bytes.to_vec()).unwrap();
+    assert!(body.contains(r#""http://10.101.0.18:9746""#));
+
+    cleanup_db(&path);
+}
+
+#[cfg(feature = "embed-web")]
+#[tokio::test]
+async fn login_route_serves_exported_login_page() {
+    let (app, path, _mock) = setup_app().await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(http::Method::GET)
+                .uri("/login")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body = String::from_utf8(bytes.to_vec()).unwrap();
+    assert!(body.contains("Sign In"));
+
+    cleanup_db(&path);
+}
+
 // T20: POST /auth/login -> valid JWT
 #[tokio::test]
 async fn t20_login_returns_valid_jwt() {
@@ -189,7 +284,10 @@ async fn t20_login_returns_valid_jwt() {
     assert_eq!(response.status(), StatusCode::OK);
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    assert!(json.get("token").is_some(), "Response should contain a token");
+    assert!(
+        json.get("token").is_some(),
+        "Response should contain a token"
+    );
     let token = json["token"].as_str().unwrap();
     assert!(!token.is_empty(), "Token should not be empty");
 
@@ -354,7 +452,10 @@ async fn t23_crud_tasks() {
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     let updated: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(updated["command"].as_str().unwrap(), "echo updated");
-    assert_eq!(updated["description"].as_str().unwrap(), "Updated description");
+    assert_eq!(
+        updated["description"].as_str().unwrap(),
+        "Updated description"
+    );
     // Name should be unchanged
     assert_eq!(updated["name"].as_str().unwrap(), "test-task");
 
@@ -397,6 +498,85 @@ async fn t23_crud_tasks() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    cleanup_db(&path);
+}
+
+#[tokio::test]
+async fn tasks_accept_and_persist_tags() {
+    let (app, path, _mock) = setup_app().await;
+    let token = login(&app).await;
+
+    let create_body = serde_json::json!({
+        "name": "tagged-task",
+        "command": "echo hello",
+        "schedule": "*-*-* 02:00:00",
+        "tags": ["prod", " backup ", "PROD", ""]
+    });
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(http::Method::POST)
+                .uri("/api/v1/tasks")
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .header(http::header::AUTHORIZATION, auth_header(&token))
+                .body(Body::from(serde_json::to_string(&create_body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let created: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let task_id = created["id"].as_str().unwrap().to_string();
+    assert_eq!(created["tags"][0].as_str().unwrap(), "prod");
+    assert_eq!(created["tags"][1].as_str().unwrap(), "backup");
+    assert_eq!(created["tags"].as_array().unwrap().len(), 2);
+
+    let update_body = serde_json::json!({
+        "tags": ["ops", "nightly"]
+    });
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(http::Method::PUT)
+                .uri(format!("/api/v1/tasks/{}", task_id))
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .header(http::header::AUTHORIZATION, auth_header(&token))
+                .body(Body::from(serde_json::to_string(&update_body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let updated: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(updated["tags"][0].as_str().unwrap(), "ops");
+    assert_eq!(updated["tags"][1].as_str().unwrap(), "nightly");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(http::Method::GET)
+                .uri("/api/v1/tasks")
+                .header(http::header::AUTHORIZATION, auth_header(&token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let tasks: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(tasks[0]["tags"][0].as_str().unwrap(), "ops");
+    assert_eq!(tasks[0]["tags"][1].as_str().unwrap(), "nightly");
 
     cleanup_db(&path);
 }
@@ -481,6 +661,25 @@ async fn t28_crud_hooks() {
     let hooks: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(hooks.len(), 1);
 
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(http::Method::GET)
+                .uri("/api/v1/hooks")
+                .header(http::header::AUTHORIZATION, auth_header(&token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let all_hooks: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(all_hooks.len(), 1);
+    assert_eq!(all_hooks[0]["task_id"].as_str().unwrap(), task_id);
+
     // --- UPDATE HOOK ---
     let update_hook = serde_json::json!({
         "command": "curl http://new-alert",
@@ -504,7 +703,10 @@ async fn t28_crud_hooks() {
     assert_eq!(response.status(), StatusCode::OK);
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     let updated: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(updated["command"].as_str().unwrap(), "curl http://new-alert");
+    assert_eq!(
+        updated["command"].as_str().unwrap(),
+        "curl http://new-alert"
+    );
     assert_eq!(updated["run_order"].as_i64().unwrap(), 2);
 
     // --- DELETE HOOK ---
@@ -679,6 +881,120 @@ async fn t29_runs_list_with_filters() {
     cleanup_db(&path);
 }
 
+#[tokio::test]
+async fn run_hook_runs_route_returns_hook_runs() {
+    let (app, path, _mock) = setup_app().await;
+    let token = login(&app).await;
+
+    let create_task = serde_json::json!({
+        "name": "hook-run-task",
+        "command": "echo hello",
+        "schedule": "*-*-* *:00:00"
+    });
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(http::Method::POST)
+                .uri("/api/v1/tasks")
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .header(http::header::AUTHORIZATION, auth_header(&token))
+                .body(Body::from(serde_json::to_string(&create_task).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let task: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let task_id = task["id"].as_str().unwrap().to_string();
+
+    let create_hook = serde_json::json!({
+        "hook_type": "on_failure",
+        "command": "echo alert",
+        "timeout_secs": 30,
+        "run_order": 0
+    });
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(http::Method::POST)
+                .uri(format!("/api/v1/tasks/{}/hooks", task_id))
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .header(http::header::AUTHORIZATION, auth_header(&token))
+                .body(Body::from(serde_json::to_string(&create_hook).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let hook: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let hook_id = hook["id"].as_str().unwrap().to_string();
+
+    let database = db::Database::new(&path).await.unwrap();
+    let conn = database.connect().await.unwrap();
+    let run = db::runs::create_job_run(
+        &conn,
+        &JobRun {
+            id: String::new(),
+            task_id: task_id.clone(),
+            started_at: String::new(),
+            finished_at: Some("2026-04-28 12:00:05".to_string()),
+            exit_code: Some(1),
+            stdout: "stdout".to_string(),
+            stderr: "stderr".to_string(),
+            status: JobRunStatus::Failed,
+            attempt: 1,
+            duration_ms: Some(5000),
+        },
+    )
+    .await
+    .unwrap();
+
+    db::runs::create_hook_run(
+        &conn,
+        &HookRun {
+            id: String::new(),
+            job_run_id: run.id.clone(),
+            hook_id: hook_id.clone(),
+            exit_code: Some(0),
+            stdout: "hook stdout".to_string(),
+            stderr: String::new(),
+            started_at: String::new(),
+            finished_at: Some("2026-04-28 12:00:06".to_string()),
+            status: HookRunStatus::Success,
+        },
+    )
+    .await
+    .unwrap();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(http::Method::GET)
+                .uri(format!("/api/v1/runs/{}/hooks", run.id))
+                .header(http::header::AUTHORIZATION, auth_header(&token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let runs: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0]["hook_id"].as_str().unwrap(), hook_id);
+    assert_eq!(runs[0]["status"].as_str().unwrap(), "success");
+
+    cleanup_db(&path);
+}
+
 // T30: Health endpoint returns ok
 #[tokio::test]
 async fn t30_health_endpoint_returns_ok() {
@@ -699,6 +1015,34 @@ async fn t30_health_endpoint_returns_ok() {
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(json["status"].as_str().unwrap(), "ok");
+
+    cleanup_db(&path);
+}
+
+#[tokio::test]
+async fn events_route_returns_sse_headers() {
+    let (app, path, _mock) = setup_app().await;
+    let token = login(&app).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(http::Method::GET)
+                .uri("/api/v1/events")
+                .header(http::header::AUTHORIZATION, auth_header(&token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let content_type = response
+        .headers()
+        .get(http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("");
+    assert!(content_type.starts_with("text/event-stream"));
 
     cleanup_db(&path);
 }

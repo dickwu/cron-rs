@@ -9,7 +9,7 @@ use tracing::error;
 use super::AppState;
 use crate::db;
 use crate::db::helpers::DbError;
-use crate::models::{JobRun, JobRunStatus};
+use crate::models::{HookRun, JobRun, JobRunStatus};
 
 // --- Request/Response types ---
 
@@ -48,6 +48,35 @@ impl From<JobRun> for RunResponse {
             status: r.status,
             attempt: r.attempt,
             duration_ms: r.duration_ms,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct HookRunResponse {
+    pub id: String,
+    pub job_run_id: String,
+    pub hook_id: String,
+    pub exit_code: Option<i32>,
+    pub stdout: String,
+    pub stderr: String,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+    pub status: crate::models::HookRunStatus,
+}
+
+impl From<HookRun> for HookRunResponse {
+    fn from(run: HookRun) -> Self {
+        HookRunResponse {
+            id: run.id,
+            job_run_id: run.job_run_id,
+            hook_id: run.hook_id,
+            exit_code: run.exit_code,
+            stdout: run.stdout,
+            stderr: run.stderr,
+            started_at: run.started_at,
+            finished_at: run.finished_at,
+            status: run.status,
         }
     }
 }
@@ -121,6 +150,59 @@ pub async fn get_run(
             .into_response(),
         Err(e) => {
             error!("Failed to get run: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Internal server error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// GET /api/v1/runs/:id/hooks
+pub async fn list_hook_runs(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let conn = match state.db.connect().await {
+        Ok(c) => c,
+        Err(e) => {
+            error!("Database connection error: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Internal server error"})),
+            )
+                .into_response();
+        }
+    };
+
+    match db::runs::get_job_run_by_id(&conn, &id).await {
+        Ok(_) => {}
+        Err(DbError::NotFound) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "Run not found"})),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            error!("Failed to get run: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Internal server error"})),
+            )
+                .into_response();
+        }
+    }
+
+    match db::runs::list_hook_runs(&conn, &id).await {
+        Ok(runs) => {
+            let responses: Vec<HookRunResponse> =
+                runs.into_iter().map(HookRunResponse::from).collect();
+            (StatusCode::OK, Json(json!(responses))).into_response()
+        }
+        Err(e) => {
+            error!("Failed to list hook runs: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({"error": "Internal server error"})),

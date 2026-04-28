@@ -10,7 +10,14 @@ use tracing::info;
 
 /// Embedded migration SQL files.
 const MIGRATIONS: &[(&str, &str)] = &[
-    ("001_initial", include_str!("../../migrations/001_initial.sql")),
+    (
+        "001_initial",
+        include_str!("../../migrations/001_initial.sql"),
+    ),
+    (
+        "002_task_tags",
+        include_str!("../../migrations/002_task_tags.sql"),
+    ),
 ];
 
 struct DatabaseInner {
@@ -75,10 +82,7 @@ impl Database {
         for (name, sql) in MIGRATIONS {
             // Check if this migration has already been applied
             let mut rows = conn
-                .query(
-                    "SELECT COUNT(*) FROM _migrations WHERE name = ?1",
-                    [*name],
-                )
+                .query("SELECT COUNT(*) FROM _migrations WHERE name = ?1", [*name])
                 .await?;
 
             let already_applied = if let Some(row) = rows.next().await? {
@@ -96,11 +100,8 @@ impl Database {
             conn.execute_batch(sql).await?;
 
             // Record the migration
-            conn.execute(
-                "INSERT INTO _migrations (name) VALUES (?1)",
-                [*name],
-            )
-            .await?;
+            conn.execute("INSERT INTO _migrations (name) VALUES (?1)", [*name])
+                .await?;
 
             info!("Migration '{}' applied successfully", name);
         }

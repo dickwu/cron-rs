@@ -28,6 +28,11 @@ pub fn service_filename(task_name: &str) -> String {
     format!("{}.service", unit_name(task_name))
 }
 
+/// Return the user service filename for the long-running cron-rs daemon.
+pub fn daemon_service_filename() -> &'static str {
+    "cron-rs-daemon.service"
+}
+
 /// Generate the content of a systemd .timer unit file for the given task.
 #[allow(dead_code)]
 pub fn generate_timer_unit(task: &Task) -> String {
@@ -61,7 +66,12 @@ pub fn generate_timer(task_name: &str, schedule: &str) -> String {
 }
 
 /// Generate a .service unit file content from raw parameters.
-pub fn generate_service(task_name: &str, task_id: &str, binary_path: &str, db_path: &str) -> String {
+pub fn generate_service(
+    task_name: &str,
+    task_id: &str,
+    binary_path: &str,
+    db_path: &str,
+) -> String {
     format!(
         "[Unit]\n\
          Description=cron-rs task: {task_name}\n\
@@ -71,6 +81,32 @@ pub fn generate_service(task_name: &str, task_id: &str, binary_path: &str, db_pa
          ExecStart={binary_path} run --task-id {task_id} --task-name {task_name} --db-path {db_path}\n\
          Environment=CRON_RS_DB={db_path}\n\
          TimeoutStartSec=infinity\n"
+    )
+}
+
+/// Generate a user systemd service for the long-running cron-rs API daemon.
+pub fn generate_daemon_service(
+    binary_path: &str,
+    host: &str,
+    port: u16,
+    config_dir: &str,
+    db_path: &str,
+) -> String {
+    format!(
+        "[Unit]\n\
+         Description=cron-rs daemon\n\
+         After=network.target\n\
+         \n\
+         [Service]\n\
+         Type=simple\n\
+         ExecStart={binary_path} daemon --host {host} --port {port}\n\
+         Environment=CRON_RS_CONFIG_DIR={config_dir}\n\
+         Environment=CRON_RS_DB={db_path}\n\
+         Restart=on-failure\n\
+         RestartSec=5\n\
+         \n\
+         [Install]\n\
+         WantedBy=default.target\n"
     )
 }
 
@@ -119,7 +155,12 @@ mod tests {
 
     #[test]
     fn test_generate_service() {
-        let content = generate_service("backup", "abc-123", "/usr/bin/cron-rs", "/home/user/cron-rs.db");
+        let content = generate_service(
+            "backup",
+            "abc-123",
+            "/usr/bin/cron-rs",
+            "/home/user/cron-rs.db",
+        );
         assert!(content.contains("Description=cron-rs task: backup"));
         assert!(content.contains("Type=oneshot"));
         assert!(content.contains("ExecStart=/usr/bin/cron-rs run --task-id abc-123 --task-name backup --db-path /home/user/cron-rs.db"));

@@ -1,5 +1,5 @@
-use cron_rs::models::Task;
 use cron_rs::models::task::ConcurrencyPolicy;
+use cron_rs::models::Task;
 use cron_rs::systemd::unit_gen;
 
 fn make_test_task(name: &str, schedule: &str) -> Task {
@@ -8,6 +8,7 @@ fn make_test_task(name: &str, schedule: &str) -> Task {
         name: name.to_string(),
         command: "echo hello".to_string(),
         schedule: schedule.to_string(),
+        tags: Vec::new(),
         description: "test task".to_string(),
         enabled: true,
         max_retries: 0,
@@ -136,8 +137,14 @@ fn timer_filename_format() {
 // Service filename
 #[test]
 fn service_filename_format() {
-    assert_eq!(unit_gen::service_filename("backup"), "cron-rs-backup.service");
-    assert_eq!(unit_gen::service_filename("my task"), "cron-rs-my-task.service");
+    assert_eq!(
+        unit_gen::service_filename("backup"),
+        "cron-rs-backup.service"
+    );
+    assert_eq!(
+        unit_gen::service_filename("my task"),
+        "cron-rs-my-task.service"
+    );
 }
 
 // Timer description includes task name
@@ -157,4 +164,22 @@ fn service_description_includes_task_name() {
         "/home/user/db.sqlite",
     );
     assert!(content.contains("Description=cron-rs task: my-backup"));
+}
+
+#[test]
+fn daemon_service_runs_daemon_with_bind_args() {
+    let content = unit_gen::generate_daemon_service(
+        "/usr/local/bin/cron-rs",
+        "0.0.0.0",
+        9746,
+        "/home/user/cron-rs",
+        "/home/user/cron-rs/cron-rs.db",
+    );
+
+    assert!(content.contains("Description=cron-rs daemon"));
+    assert!(content.contains("ExecStart=/usr/local/bin/cron-rs daemon --host 0.0.0.0 --port 9746"));
+    assert!(content.contains("Environment=CRON_RS_CONFIG_DIR=/home/user/cron-rs"));
+    assert!(content.contains("Environment=CRON_RS_DB=/home/user/cron-rs/cron-rs.db"));
+    assert!(content.contains("Restart=on-failure"));
+    assert!(content.contains("WantedBy=default.target"));
 }

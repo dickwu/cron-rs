@@ -65,6 +65,23 @@ pub async fn list_for_task(conn: &Connection, task_id: &str) -> Result<Vec<Hook>
     Ok(hooks)
 }
 
+/// List all hooks across all tasks, ordered by task then run order.
+pub async fn list_all(conn: &Connection) -> Result<Vec<Hook>, DbError> {
+    let mut rows = conn
+        .query(
+            "SELECT id, task_id, hook_type, command, timeout_secs, run_order, created_at
+             FROM hooks ORDER BY task_id, run_order, created_at",
+            (),
+        )
+        .await?;
+
+    let mut hooks = Vec::new();
+    while let Some(row) = rows.next().await? {
+        hooks.push(Hook::from_row(&row)?);
+    }
+    Ok(hooks)
+}
+
 /// Get hooks for a task filtered by hook type, ordered by run_order.
 pub async fn get_by_type(
     conn: &Connection,

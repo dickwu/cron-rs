@@ -38,6 +38,7 @@ pub struct Task {
     pub name: String,
     pub command: String,
     pub schedule: String,
+    pub tags: Vec<String>,
     pub description: String,
     pub enabled: bool,
     pub max_retries: i32,

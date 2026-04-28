@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
@@ -19,6 +21,7 @@ pub struct CreateTaskRequest {
     pub name: String,
     pub command: String,
     pub schedule: String,
+    pub tags: Option<Vec<String>>,
     pub description: Option<String>,
     pub max_retries: Option<i32>,
     pub retry_delay_secs: Option<i32>,
@@ -31,6 +34,7 @@ pub struct UpdateTaskRequest {
     pub name: Option<String>,
     pub command: Option<String>,
     pub schedule: Option<String>,
+    pub tags: Option<Vec<String>>,
     pub description: Option<String>,
     pub max_retries: Option<i32>,
     pub retry_delay_secs: Option<i32>,
@@ -44,6 +48,7 @@ pub struct TaskResponse {
     pub name: String,
     pub command: String,
     pub schedule: String,
+    pub tags: Vec<String>,
     pub description: String,
     pub enabled: bool,
     pub max_retries: i32,
@@ -61,6 +66,7 @@ impl From<Task> for TaskResponse {
             name: t.name,
             command: t.command,
             schedule: t.schedule,
+            tags: t.tags,
             description: t.description,
             enabled: t.enabled,
             max_retries: t.max_retries,
@@ -90,6 +96,24 @@ fn db_error_to_response(err: DbError) -> (StatusCode, Json<serde_json::Value>) {
             )
         }
     }
+}
+
+fn normalize_tags(tags: Vec<String>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut normalized = Vec::new();
+
+    for tag in tags {
+        let trimmed = tag.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        if seen.insert(trimmed.to_ascii_lowercase()) {
+            normalized.push(trimmed.to_string());
+        }
+    }
+
+    normalized
 }
 
 // --- Handlers ---
@@ -144,6 +168,7 @@ pub async fn create_task(
         name: body.name,
         command: body.command,
         schedule: body.schedule,
+        tags: normalize_tags(body.tags.unwrap_or_default()),
         description: body.description.unwrap_or_default(),
         enabled: true,
         max_retries: body.max_retries.unwrap_or(0),
@@ -187,14 +212,15 @@ pub async fn create_task(
     }
 
     info!("Created task '{}' (id: {})", created.name, created.id);
-    (StatusCode::CREATED, Json(json!(TaskResponse::from(created)))).into_response()
+    (
+        StatusCode::CREATED,
+        Json(json!(TaskResponse::from(created))),
+    )
+        .into_response()
 }
 
 /// GET /api/v1/tasks/:id
-pub async fn get_task(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> impl IntoResponse {
+pub async fn get_task(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
     let conn = match state.db.connect().await {
         Ok(c) => c,
         Err(e) => {
@@ -259,6 +285,7 @@ pub async fn update_task(
         name: body.name.unwrap_or(existing.name.clone()),
         command: body.command.unwrap_or(existing.command),
         schedule: body.schedule.unwrap_or(existing.schedule),
+        tags: body.tags.map(normalize_tags).unwrap_or(existing.tags),
         description: body.description.unwrap_or(existing.description),
         enabled: existing.enabled,
         max_retries: body.max_retries.unwrap_or(existing.max_retries),

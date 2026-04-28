@@ -34,6 +34,7 @@ The **daemon** exposes the API and manages systemd unit files. When a timer fire
 - **CLI** -- manage everything from the terminal
 - **JWT authentication** -- token-based auth with configurable expiry
 - **Hooks** -- `on_failure`, `on_success`, `on_retry_exhausted` per task
+- **Embedded web dashboard** -- serve the management UI from the daemon on the same host/port
 - **Retry with backoff** -- configurable max retries and delay
 - **Concurrency control** -- skip, queue, or allow parallel runs
 - **SQLite via libsql** -- zero-config embedded database
@@ -46,15 +47,25 @@ The **daemon** exposes the API and manages systemd unit files. When a timer fire
 # 1. Initialize (creates config, DB, and admin credentials)
 cron-rs init
 
-# 2. Start the daemon
-cron-rs daemon
+# Or initialize from a non-interactive SSH session
+cron-rs init \
+  --username admin \
+  --password 'change-this-password' \
+  --host 0.0.0.0 \
+  --port 9746
 
-# 3. Create a task
+# 2. Import existing user crontab and user systemd timers into cron-rs
+cron-rs import
+
+# 3. Install and start the daemon as a user systemd service
+cron-rs service install --host 0.0.0.0 --start
+
+# 4. Create a task
 cron-rs task create my-backup \
   --command "/usr/local/bin/backup.sh" \
   --schedule "*-*-* 02:00:00"
 
-# 4. Check status
+# 5. Check status
 cron-rs status
 ```
 
@@ -75,7 +86,17 @@ cargo install --git https://github.com/dickwu/cron-rs
 | Command | Description |
 |---------|-------------|
 | `cron-rs init` | Interactive first-time setup |
-| `cron-rs daemon` | Start the API server |
+| `cron-rs init --username <u> --password <p> --host 0.0.0.0` | Non-interactive SSH/server setup |
+| `cron-rs daemon` | Start the API server in the foreground |
+| `cron-rs daemon --host 0.0.0.0 --port 9746` | Start the API server with runtime bind overrides |
+| `cron-rs service install --host 0.0.0.0 --start` | Install and start the daemon with `systemctl --user` |
+| `cron-rs service restart` | Restart the user systemd daemon service |
+| `cron-rs service status` | Show `systemctl --user status cron-rs-daemon.service` |
+| `cron-rs service uninstall` | Disable and remove the user systemd daemon service |
+| `cron-rs import` | Import user crontab and user systemd timers into cron-rs as disabled tasks |
+| `cron-rs import --include-system` | Also inspect system-wide systemd timers |
+| `cron-rs import --enable` | Enable imported tasks and install cron-rs timers immediately |
+| `cron-rs import --dry-run` | Preview import candidates without changing the DB |
 | `cron-rs status` | Show status of all tasks |
 | `cron-rs doctor` | Diagnose common issues |
 | `cron-rs regenerate` | Regenerate systemd units from DB |
@@ -110,19 +131,21 @@ All endpoints under `/api/v1/` require JWT auth (`Authorization: Bearer <token>`
 | POST | `/api/v1/tasks/{id}/enable` | Enable task |
 | POST | `/api/v1/tasks/{id}/disable` | Disable task |
 | POST | `/api/v1/tasks/{id}/trigger` | Trigger immediate run |
+| GET | `/api/v1/hooks` | List all configured hooks |
 | GET | `/api/v1/tasks/{id}/hooks` | List hooks for task |
 | POST | `/api/v1/tasks/{id}/hooks` | Create hook |
 | PUT | `/api/v1/hooks/{id}` | Update hook |
 | DELETE | `/api/v1/hooks/{id}` | Delete hook |
 | GET | `/api/v1/runs` | List runs |
 | GET | `/api/v1/runs/{id}` | Get run details |
+| GET | `/api/v1/runs/{id}/hooks` | List hook runs for a run |
 | GET | `/api/v1/tasks/{id}/runs` | List runs for task |
 | GET | `/api/v1/schedule/preview` | Preview schedule times (`?expr=...&count=5`) |
 | GET | `/api/v1/events` | SSE event stream |
 
 ## Configuration
 
-Configuration is stored in `~/.cron-rs/.env` (created by `cron-rs init`).
+Configuration is stored in `~/cron-rs/.env` (created by `cron-rs init`).
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -131,14 +154,50 @@ Configuration is stored in `~/.cron-rs/.env` (created by `cron-rs init`).
 | `CRON_RS_JWT_SECRET` | -- | JWT signing secret (set by init) |
 | `CRON_RS_HOST` | `127.0.0.1` | Bind address |
 | `CRON_RS_PORT` | `9746` | Bind port |
-| `CRON_RS_DB` | `~/.cron-rs/cron-rs.db` | Database path |
+| `CRON_RS_DB` | `~/cron-rs/cron-rs.db` | Database path |
 | `CRON_RS_TOKEN_EXPIRY` | `24h` | JWT token expiry |
-| `CRON_RS_CONFIG_DIR` | `~/.cron-rs` | Config directory |
+| `CRON_RS_CONFIG_DIR` | `~/cron-rs` | Config directory |
 | `CRON_RS_CORS_ORIGIN` | -- | CORS origin (for external web UI) |
+
+## Importing Existing Schedules
+
+`cron-rs import` reads the current user's crontab (`crontab -l`) and user
+systemd timers (`systemctl --user list-unit-files --type=timer`) into the
+cron-rs database. Imported tasks are disabled by default so the original
+crontab/timer and cron-rs do not both run the same command. Use
+`cron-rs import --enable` only when you are ready for cron-rs to install and
+start its own timers.
+
+Cron lines with both day-of-month and day-of-week restrictions are skipped
+because cron treats those fields as an OR, while one systemd `OnCalendar`
+expression cannot preserve that behavior safely.
 
 ## Web Dashboard
 
-For a web dashboard, see [cron-rs-web](https://github.com/dickwu/cron-rs-web).
+The daemon can serve the exported management dashboard directly on the same
+host and port as the API when built with the `embed-web` feature. The embedded
+UI includes the dashboard, task list/detail views, a read-only hooks catalog at
+`/hooks`, and a settings screen at `/settings`. Hook add/edit/delete stays on
+the task detail page so each hook remains scoped to its task.
+
+```bash
+# Build the static dashboard from the sibling cron-rs-web checkout
+cd ../cron-rs-web
+npm ci
+npm run build
+
+# Build and install a daemon binary that embeds the dashboard
+cd ../cron-rs
+cargo build --release --features embed-web
+./target/release/cron-rs service install --host 0.0.0.0 --port 9746 --start
+
+# Open the management page
+open http://10.101.0.18:9746/
+```
+
+The API remains available under `/api/v1/*`, and all other browser routes fall
+back to the dashboard. This is the simplest way to expose a single management
+entry point from an SSH-hosted Linux server.
 
 ## License
 

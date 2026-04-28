@@ -25,9 +25,15 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Daemon => {
+        Commands::Daemon { host, port } => {
             // Load config
-            let config = config::Config::load()?;
+            let mut config = config::Config::load()?;
+            if let Some(host) = host {
+                config.host = host;
+            }
+            if let Some(port) = port {
+                config.port = port;
+            }
 
             // Create database and run migrations
             let database = db::Database::new(&config.db_path).await?;
@@ -59,8 +65,40 @@ async fn main() -> anyhow::Result<()> {
             let listener = tokio::net::TcpListener::bind(&addr).await?;
             axum::serve(listener, app).await?;
         }
-        Commands::Init => {
-            cli::init::run_init().await?;
+        Commands::Init {
+            username,
+            password,
+            host,
+            port,
+            config_dir,
+            db_path,
+        } => {
+            cli::init::run_init(cli::init::InitOptions {
+                username,
+                password,
+                host,
+                port,
+                config_dir,
+                db_path,
+            })
+            .await?;
+        }
+        Commands::Import {
+            source,
+            include_system,
+            dry_run,
+            enable,
+        } => {
+            cli::import::run_import(cli::import::ImportOptions {
+                source,
+                include_system,
+                dry_run,
+                enable,
+            })
+            .await?;
+        }
+        Commands::Service { command } => {
+            cli::service::handle_service_command(command).await?;
         }
         Commands::Task { command } => {
             cli::task::handle_task_command(command).await?;

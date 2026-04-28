@@ -75,6 +75,37 @@ fn db_error_to_response(err: DbError) -> (StatusCode, Json<serde_json::Value>) {
 
 // --- Handlers ---
 
+/// GET /api/v1/hooks
+pub async fn list_all_hooks(State(state): State<AppState>) -> impl IntoResponse {
+    let conn = match state.db.connect().await {
+        Ok(c) => c,
+        Err(e) => {
+            error!("Database connection error: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Internal server error"})),
+            )
+                .into_response();
+        }
+    };
+
+    match db::hooks::list_all(&conn).await {
+        Ok(hooks) => {
+            let responses: Vec<HookResponse> =
+                hooks.into_iter().map(HookResponse::from).collect();
+            (StatusCode::OK, Json(json!(responses))).into_response()
+        }
+        Err(e) => {
+            error!("Failed to list hooks: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Internal server error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
 /// GET /api/v1/tasks/:task_id/hooks
 pub async fn list_hooks(
     State(state): State<AppState>,

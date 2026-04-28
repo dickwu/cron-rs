@@ -1,7 +1,7 @@
 use thiserror::Error;
 
-use crate::models::{Hook, HookRun, HookRunStatus, HookType, JobRun, JobRunStatus, Task};
 use crate::models::task::ConcurrencyPolicy;
+use crate::models::{Hook, HookRun, HookRunStatus, HookType, JobRun, JobRunStatus, Task};
 
 #[derive(Debug, Error)]
 pub enum DbError {
@@ -33,6 +33,11 @@ impl FromRow for Task {
         let concurrency_policy: ConcurrencyPolicy = concurrency_str
             .parse()
             .map_err(|e: String| DbError::QueryError(e))?;
+        let tags_json = row
+            .get::<Option<String>>(12)?
+            .unwrap_or_else(|| "[]".to_string());
+        let tags = serde_json::from_str::<Vec<String>>(&tags_json)
+            .map_err(|e| DbError::QueryError(format!("invalid task tags JSON: {e}")))?;
 
         Ok(Task {
             id: row.get::<String>(0)?,
@@ -47,6 +52,7 @@ impl FromRow for Task {
             concurrency_policy,
             created_at: row.get::<String>(10)?,
             updated_at: row.get::<String>(11)?,
+            tags,
         })
     }
 }

@@ -1,7 +1,9 @@
 pub mod auth;
+pub mod events;
 pub mod hooks;
 pub mod middleware;
 pub mod runs;
+pub mod static_files;
 pub mod tasks;
 
 use std::sync::Arc;
@@ -52,6 +54,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/tasks/{id}/disable", post(tasks::disable_task))
         .route("/api/v1/tasks/{id}/trigger", post(tasks::trigger_task))
         // Hooks
+        .route("/api/v1/hooks", get(hooks::list_all_hooks))
         .route("/api/v1/tasks/{id}/hooks", get(hooks::list_hooks))
         .route("/api/v1/tasks/{id}/hooks", post(hooks::create_hook))
         .route("/api/v1/hooks/{id}", put(hooks::update_hook))
@@ -59,15 +62,18 @@ pub fn router(state: AppState) -> Router {
         // Runs
         .route("/api/v1/runs", get(runs::list_runs))
         .route("/api/v1/runs/{id}", get(runs::get_run))
+        .route("/api/v1/runs/{id}/hooks", get(runs::list_hook_runs))
         .route("/api/v1/tasks/{id}/runs", get(runs::list_task_runs))
         // Status
         .route("/api/v1/status", get(status))
+        .route("/api/v1/events", get(events::events))
         // Apply auth middleware to all protected routes
         .layer(axum::middleware::from_fn(middleware::require_auth));
 
     Router::new()
         .merge(public_routes)
         .merge(protected_routes)
+        .fallback(static_files::static_handler)
         .layer(axum::Extension(JwtSecret(jwt_secret)))
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())
@@ -116,16 +122,15 @@ async fn status(State(state): State<AppState>) -> impl IntoResponse {
     };
 
     // Count recent failures (last 24h)
-    let recent_failures = match db::runs::list_job_runs(&conn, None, Some("failed"), Some(1000), Some(0)).await {
-        Ok(runs) => {
-            let cutoff = chrono::Utc::now() - chrono::Duration::hours(24);
-            let cutoff_str = cutoff.format("%Y-%m-%d %H:%M:%S").to_string();
-            runs.iter()
-                .filter(|r| r.started_at >= cutoff_str)
-                .count()
-        }
-        Err(_) => 0,
-    };
+    let recent_failures =
+        match db::runs::list_job_runs(&conn, None, Some("failed"), Some(1000), Some(0)).await {
+            Ok(runs) => {
+                let cutoff = chrono::Utc::now() - chrono::Duration::hours(24);
+                let cutoff_str = cutoff.format("%Y-%m-%d %H:%M:%S").to_string();
+                runs.iter().filter(|r| r.started_at >= cutoff_str).count()
+            }
+            Err(_) => 0,
+        };
 
     (
         StatusCode::OK,

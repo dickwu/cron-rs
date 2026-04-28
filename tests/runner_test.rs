@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use cron_rs::db;
-use cron_rs::models::*;
 use cron_rs::models::task::ConcurrencyPolicy;
+use cron_rs::models::*;
 use cron_rs::runner;
 use cron_rs::runner::executor;
 use cron_rs::runner::retry;
@@ -16,8 +16,13 @@ fn temp_db_path() -> PathBuf {
 /// Create and initialize a fresh test database, returning (Database, path_string).
 async fn setup_db() -> (db::Database, PathBuf) {
     let path = temp_db_path();
-    let database = db::Database::new(&path).await.expect("Failed to create database");
-    database.run_migrations().await.expect("Failed to run migrations");
+    let database = db::Database::new(&path)
+        .await
+        .expect("Failed to create database");
+    database
+        .run_migrations()
+        .await
+        .expect("Failed to run migrations");
     (database, path)
 }
 
@@ -33,6 +38,7 @@ fn make_test_task(name: &str, command: &str) -> Task {
         name: name.to_string(),
         command: command.to_string(),
         schedule: "*-*-* *:00:00".to_string(),
+        tags: Vec::new(),
         description: "test task".to_string(),
         enabled: true,
         max_retries: 0,
@@ -157,7 +163,10 @@ async fn t8_retry_succeeds_on_second_attempt() {
 // Retry logic unit tests
 #[test]
 fn test_should_retry_no_retries() {
-    assert!(!retry::should_retry(0, 1), "0 max_retries means no retries at all");
+    assert!(
+        !retry::should_retry(0, 1),
+        "0 max_retries means no retries at all"
+    );
     assert!(!retry::should_retry(0, 2));
 }
 
@@ -173,10 +182,10 @@ fn test_should_retry_with_retries() {
 #[test]
 fn test_retry_delay_exponential_backoff() {
     // base_delay_secs=5
-    assert_eq!(retry::retry_delay_secs(5, 1), 5);   // 5 * 2^0
-    assert_eq!(retry::retry_delay_secs(5, 2), 10);  // 5 * 2^1
-    assert_eq!(retry::retry_delay_secs(5, 3), 20);  // 5 * 2^2
-    assert_eq!(retry::retry_delay_secs(5, 4), 40);  // 5 * 2^3
+    assert_eq!(retry::retry_delay_secs(5, 1), 5); // 5 * 2^0
+    assert_eq!(retry::retry_delay_secs(5, 2), 10); // 5 * 2^1
+    assert_eq!(retry::retry_delay_secs(5, 3), 20); // 5 * 2^2
+    assert_eq!(retry::retry_delay_secs(5, 4), 40); // 5 * 2^3
 }
 
 #[test]
@@ -219,9 +228,7 @@ async fn test_executor_successful_command() {
 // Test executor: failing command
 #[tokio::test]
 async fn test_executor_failing_command() {
-    let result = executor::execute_command("exit 42", None)
-        .await
-        .unwrap();
+    let result = executor::execute_command("exit 42", None).await.unwrap();
 
     assert_eq!(result.exit_code, 42);
     assert!(!result.timed_out);

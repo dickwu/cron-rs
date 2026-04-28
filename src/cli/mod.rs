@@ -1,10 +1,12 @@
 pub mod doctor;
 pub mod hook;
+pub mod import;
 pub mod init;
 pub mod runs;
+pub mod service;
 pub mod task;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Debug, Parser)]
 #[command(name = "cron-rs", version, about = "Systemd timer management platform")]
@@ -16,10 +18,58 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Commands {
     /// Start the daemon (API server)
-    Daemon,
+    Daemon {
+        /// Bind address for this daemon process
+        #[arg(long)]
+        host: Option<String>,
+        /// Bind port for this daemon process
+        #[arg(long)]
+        port: Option<u16>,
+    },
 
     /// Interactive first-time setup
-    Init,
+    Init {
+        /// Admin username to write to config
+        #[arg(long)]
+        username: Option<String>,
+        /// Admin password to hash and write to config
+        #[arg(long)]
+        password: Option<String>,
+        /// API bind address to write to config, e.g. 0.0.0.0 for SSH-hosted use
+        #[arg(long)]
+        host: Option<String>,
+        /// API bind port to write to config
+        #[arg(long)]
+        port: Option<u16>,
+        /// Config directory to write, defaults to ~/cron-rs
+        #[arg(long)]
+        config_dir: Option<String>,
+        /// Database path to write, defaults to <config-dir>/cron-rs.db
+        #[arg(long)]
+        db_path: Option<String>,
+    },
+
+    /// Import existing crontab and systemd timer entries into cron-rs
+    Import {
+        /// Source to import from
+        #[arg(long, value_enum, default_value_t = ImportSource::All)]
+        source: ImportSource,
+        /// Also inspect system-wide systemd timers (`systemctl list-unit-files --type=timer`)
+        #[arg(long)]
+        include_system: bool,
+        /// Print what would be imported without changing the database
+        #[arg(long)]
+        dry_run: bool,
+        /// Enable imported tasks and install cron-rs timers immediately
+        #[arg(long)]
+        enable: bool,
+    },
+
+    /// Manage the cron-rs daemon user systemd service
+    Service {
+        #[command(subcommand)]
+        command: ServiceCommands,
+    },
 
     /// Manage tasks
     Task {
@@ -59,6 +109,39 @@ pub enum Commands {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ImportSource {
+    All,
+    Crontab,
+    Systemd,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ServiceCommands {
+    /// Install or update the user systemd service
+    Install {
+        /// Bind address for the daemon service
+        #[arg(long)]
+        host: Option<String>,
+        /// Bind port for the daemon service
+        #[arg(long)]
+        port: Option<u16>,
+        /// Start or restart the service after installing it
+        #[arg(long)]
+        start: bool,
+    },
+    /// Remove the user systemd service
+    Uninstall,
+    /// Start the user systemd service
+    Start,
+    /// Stop the user systemd service
+    Stop,
+    /// Restart the user systemd service
+    Restart,
+    /// Show the user systemd service status
+    Status,
+}
+
 #[derive(Debug, Subcommand)]
 pub enum TaskCommands {
     /// List all tasks
@@ -83,9 +166,7 @@ pub enum TaskCommands {
         concurrency_policy: Option<String>,
     },
     /// Show a task by name or id
-    Show {
-        name_or_id: String,
-    },
+    Show { name_or_id: String },
     /// Edit a task
     Edit {
         name_or_id: String,
@@ -105,21 +186,13 @@ pub enum TaskCommands {
         concurrency_policy: Option<String>,
     },
     /// Delete a task
-    Delete {
-        name_or_id: String,
-    },
+    Delete { name_or_id: String },
     /// Enable a task
-    Enable {
-        name_or_id: String,
-    },
+    Enable { name_or_id: String },
     /// Disable a task
-    Disable {
-        name_or_id: String,
-    },
+    Disable { name_or_id: String },
     /// Trigger a task to run immediately
-    Trigger {
-        name_or_id: String,
-    },
+    Trigger { name_or_id: String },
 }
 
 #[derive(Debug, Subcommand)]
@@ -163,7 +236,5 @@ pub enum RunsCommands {
         limit: i64,
     },
     /// Show details of a specific run
-    Show {
-        id: String,
-    },
+    Show { id: String },
 }
