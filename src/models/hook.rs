@@ -37,7 +37,7 @@ impl FromStr for HookType {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Hook {
     pub id: String,
-    pub task_id: String,
+    pub task_id: Option<String>,
     pub hook_type: HookType,
     pub command: String,
     pub timeout_secs: Option<i32>,

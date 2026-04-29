@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 -- Hooks table
 CREATE TABLE IF NOT EXISTS hooks (
     id TEXT PRIMARY KEY,
-    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
     hook_type TEXT NOT NULL CHECK (hook_type IN ('on_failure', 'on_success', 'on_retry_exhausted')),
     command TEXT NOT NULL,
     timeout_secs INTEGER,

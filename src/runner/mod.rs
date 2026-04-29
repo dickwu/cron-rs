@@ -303,32 +303,43 @@ async fn run_hooks_by_type(
     db_path: &str,
     task_name: &str,
 ) {
-    match db::hooks::get_by_type(conn, task_id, &hook_type).await {
-        Ok(matched_hooks) => {
-            if !matched_hooks.is_empty() {
-                info!(
-                    task_name = %task_name,
-                    hook_type = %hook_type,
-                    count = matched_hooks.len(),
-                    "Running {} hooks",
-                    hook_type
-                );
-                if let Err(e) =
-                    hooks::execute_hooks(&matched_hooks, job_run_id, db_path).await
-                {
-                    warn!(
-                        task_name = %task_name,
-                        "Error executing {} hooks: {}",
-                        hook_type,
-                        e
-                    );
-                }
-            }
-        }
+    let mut matched_hooks = match db::hooks::get_by_type(conn, task_id, &hook_type).await {
+        Ok(task_hooks) => task_hooks,
         Err(e) => {
             warn!(
                 task_name = %task_name,
-                "Failed to fetch {} hooks: {}",
+                "Failed to fetch task-scoped {} hooks: {}",
+                hook_type,
+                e
+            );
+            Vec::new()
+        }
+    };
+
+    match db::hooks::get_global_by_type(conn, &hook_type).await {
+        Ok(global_hooks) => matched_hooks.extend(global_hooks),
+        Err(e) => {
+            warn!(
+                task_name = %task_name,
+                "Failed to fetch global {} hooks: {}",
+                hook_type,
+                e
+            );
+        }
+    }
+
+    if !matched_hooks.is_empty() {
+        info!(
+            task_name = %task_name,
+            hook_type = %hook_type,
+            count = matched_hooks.len(),
+            "Running {} hooks",
+            hook_type
+        );
+        if let Err(e) = hooks::execute_hooks(&matched_hooks, job_run_id, db_path).await {
+            warn!(
+                task_name = %task_name,
+                "Error executing {} hooks: {}",
                 hook_type,
                 e
             );

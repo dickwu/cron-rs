@@ -746,6 +746,84 @@ async fn t28_crud_hooks() {
     cleanup_db(&path);
 }
 
+#[tokio::test]
+async fn global_hooks_api_crud() {
+    let (app, path, _mock) = setup_app().await;
+    let token = login(&app).await;
+
+    let create_hook = serde_json::json!({
+        "hook_type": "on_success",
+        "command": "echo global-success",
+        "timeout_secs": 20,
+        "run_order": 2
+    });
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(http::Method::POST)
+                .uri("/api/v1/hooks/global")
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .header(http::header::AUTHORIZATION, auth_header(&token))
+                .body(Body::from(serde_json::to_string(&create_hook).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let hook: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let hook_id = hook["id"].as_str().unwrap().to_string();
+    assert!(hook["task_id"].is_null());
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(http::Method::GET)
+                .uri("/api/v1/hooks/global")
+                .header(http::header::AUTHORIZATION, auth_header(&token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let hooks: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(hooks.len(), 1);
+    assert!(hooks[0]["task_id"].is_null());
+
+    let update_hook = serde_json::json!({
+        "command": "echo global-updated"
+    });
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(http::Method::PUT)
+                .uri(format!("/api/v1/hooks/{}", hook_id))
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .header(http::header::AUTHORIZATION, auth_header(&token))
+                .body(Body::from(serde_json::to_string(&update_hook).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let updated: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(updated["command"].as_str().unwrap(), "echo global-updated");
+    assert!(updated["task_id"].is_null());
+
+    cleanup_db(&path);
+}
+
 // T29: Runs list with filters
 #[tokio::test]
 async fn t29_runs_list_with_filters() {

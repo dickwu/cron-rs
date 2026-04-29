@@ -146,7 +146,7 @@ async fn t40_cascade_deletes() {
     // Create a hook for the task
     let hook = Hook {
         id: String::new(),
-        task_id: created_task.id.clone(),
+        task_id: Some(created_task.id.clone()),
         hook_type: HookType::Failure,
         command: "echo fail".to_string(),
         timeout_secs: None,
@@ -358,7 +358,7 @@ async fn hook_crud_create() {
 
     let hook = Hook {
         id: String::new(),
-        task_id: task.id.clone(),
+        task_id: Some(task.id.clone()),
         hook_type: HookType::Failure,
         command: "curl -X POST http://alert".to_string(),
         timeout_secs: Some(30),
@@ -368,7 +368,7 @@ async fn hook_crud_create() {
 
     let created = db::hooks::create(&conn, &hook).await.unwrap();
     assert!(!created.id.is_empty());
-    assert_eq!(created.task_id, task.id);
+    assert_eq!(created.task_id.as_deref(), Some(task.id.as_str()));
     assert_eq!(created.hook_type, HookType::Failure);
     assert_eq!(created.command, "curl -X POST http://alert");
     assert_eq!(created.timeout_secs, Some(30));
@@ -391,7 +391,7 @@ async fn hook_crud_list_for_task() {
     for i in 0..3 {
         let hook = Hook {
             id: String::new(),
-            task_id: task.id.clone(),
+            task_id: Some(task.id.clone()),
             hook_type: HookType::Failure,
             command: format!("echo hook_{}", i),
             timeout_secs: None,
@@ -407,6 +407,54 @@ async fn hook_crud_list_for_task() {
     assert_eq!(hooks[0].run_order, 0);
     assert_eq!(hooks[1].run_order, 1);
     assert_eq!(hooks[2].run_order, 2);
+
+    cleanup_db(&path);
+}
+
+// Hook CRUD: list_global
+#[tokio::test]
+async fn hook_crud_list_global() {
+    let (database, path) = setup_db().await;
+    let conn = database.connect().await.unwrap();
+
+    let task = db::tasks::create(&conn, &make_test_task("hook-global-test", "echo hi"))
+        .await
+        .unwrap();
+
+    db::hooks::create(
+        &conn,
+        &Hook {
+            id: String::new(),
+            task_id: Some(task.id.clone()),
+            hook_type: HookType::Failure,
+            command: "echo task_hook".to_string(),
+            timeout_secs: None,
+            run_order: 0,
+            created_at: String::new(),
+        },
+    )
+    .await
+    .unwrap();
+
+    db::hooks::create(
+        &conn,
+        &Hook {
+            id: String::new(),
+            task_id: None,
+            hook_type: HookType::Success,
+            command: "echo global_hook".to_string(),
+            timeout_secs: Some(15),
+            run_order: 1,
+            created_at: String::new(),
+        },
+    )
+    .await
+    .unwrap();
+
+    let hooks = db::hooks::list_global(&conn).await.unwrap();
+    assert_eq!(hooks.len(), 1);
+    assert_eq!(hooks[0].task_id, None);
+    assert_eq!(hooks[0].command, "echo global_hook");
 
     cleanup_db(&path);
 }
@@ -432,7 +480,7 @@ async fn hook_crud_get_by_type() {
     {
         let hook = Hook {
             id: String::new(),
-            task_id: task.id.clone(),
+            task_id: Some(task.id.clone()),
             hook_type: hook_type.clone(),
             command: format!("echo hook_{}", i),
             timeout_secs: None,
@@ -468,7 +516,7 @@ async fn hook_crud_delete() {
 
     let hook = Hook {
         id: String::new(),
-        task_id: task.id.clone(),
+        task_id: Some(task.id.clone()),
         hook_type: HookType::Success,
         command: "echo done".to_string(),
         timeout_secs: None,

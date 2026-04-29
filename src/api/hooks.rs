@@ -32,7 +32,7 @@ pub struct UpdateHookRequest {
 #[derive(Debug, Serialize)]
 pub struct HookResponse {
     pub id: String,
-    pub task_id: String,
+    pub task_id: Option<String>,
     pub hook_type: HookType,
     pub command: String,
     pub timeout_secs: Option<i32>,
@@ -97,6 +97,37 @@ pub async fn list_all_hooks(State(state): State<AppState>) -> impl IntoResponse 
         }
         Err(e) => {
             error!("Failed to list hooks: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Internal server error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// GET /api/v1/hooks/global
+pub async fn list_global_hooks(State(state): State<AppState>) -> impl IntoResponse {
+    let conn = match state.db.connect().await {
+        Ok(c) => c,
+        Err(e) => {
+            error!("Database connection error: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Internal server error"})),
+            )
+                .into_response();
+        }
+    };
+
+    match db::hooks::list_global(&conn).await {
+        Ok(hooks) => {
+            let responses: Vec<HookResponse> =
+                hooks.into_iter().map(HookResponse::from).collect();
+            (StatusCode::OK, Json(json!(responses))).into_response()
+        }
+        Err(e) => {
+            error!("Failed to list global hooks: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({"error": "Internal server error"})),
@@ -203,7 +234,7 @@ pub async fn create_hook(
 
     let hook = Hook {
         id: String::new(),
-        task_id,
+        task_id: Some(task_id),
         hook_type,
         command: body.command,
         timeout_secs: body.timeout_secs,
@@ -213,7 +244,57 @@ pub async fn create_hook(
 
     match db::hooks::create(&conn, &hook).await {
         Ok(created) => {
-            info!("Created hook (id: {}) for task '{}'", created.id, created.task_id);
+            info!("Created hook (id: {})", created.id);
+            (
+                StatusCode::CREATED,
+                Json(json!(HookResponse::from(created))),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            let (status, body) = db_error_to_response(e);
+            (status, body).into_response()
+        }
+    }
+}
+
+/// POST /api/v1/hooks/global
+pub async fn create_global_hook(
+    State(state): State<AppState>,
+    Json(body): Json<CreateHookRequest>,
+) -> impl IntoResponse {
+    let hook_type = match body.hook_type.parse::<HookType>() {
+        Ok(ht) => ht,
+        Err(e) => {
+            return (StatusCode::BAD_REQUEST, Json(json!({"error": e}))).into_response();
+        }
+    };
+
+    let conn = match state.db.connect().await {
+        Ok(c) => c,
+        Err(e) => {
+            error!("Database connection error: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Internal server error"})),
+            )
+                .into_response();
+        }
+    };
+
+    let hook = Hook {
+        id: String::new(),
+        task_id: None,
+        hook_type,
+        command: body.command,
+        timeout_secs: body.timeout_secs,
+        run_order: body.run_order.unwrap_or(0),
+        created_at: String::new(),
+    };
+
+    match db::hooks::create(&conn, &hook).await {
+        Ok(created) => {
+            info!("Created global hook (id: {})", created.id);
             (
                 StatusCode::CREATED,
                 Json(json!(HookResponse::from(created))),

@@ -66,7 +66,7 @@ impl FromRow for Hook {
 
         Ok(Hook {
             id: row.get::<String>(0)?,
-            task_id: row.get::<String>(1)?,
+            task_id: row.get::<Option<String>>(1)?,
             hook_type,
             command: row.get::<String>(3)?,
             timeout_secs: row.get::<Option<i32>>(4)?,

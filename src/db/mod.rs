@@ -18,6 +18,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "002_task_tags",
         include_str!("../../migrations/002_task_tags.sql"),
     ),
+    (
+        "003_global_hooks",
+        include_str!("../../migrations/003_global_hooks.sql"),
+    ),
 ];
 
 struct DatabaseInner {
@@ -90,6 +94,7 @@ impl Database {
             } else {
                 false
             };
+            drop(rows);
 
             if already_applied {
                 info!("Migration '{}' already applied, skipping", name);

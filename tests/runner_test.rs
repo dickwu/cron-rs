@@ -160,6 +160,44 @@ async fn t8_retry_succeeds_on_second_attempt() {
     cleanup_db(&path);
 }
 
+#[tokio::test]
+async fn global_success_hooks_execute_for_task_runs() {
+    let (database, path) = setup_db().await;
+    let conn = database.connect().await.unwrap();
+
+    let task = make_test_task("global-hook-success-task", "echo hello && exit 0");
+    let created = db::tasks::create(&conn, &task).await.unwrap();
+
+    let hook = Hook {
+        id: String::new(),
+        task_id: None,
+        hook_type: HookType::Success,
+        command: "echo global_success_hook".to_string(),
+        timeout_secs: Some(5),
+        run_order: 0,
+        created_at: String::new(),
+    };
+    db::hooks::create(&conn, &hook).await.unwrap();
+
+    let db_path_str = path.to_str().unwrap();
+    let exit_code = runner::run_task(&created.id, &created.name, db_path_str)
+        .await
+        .unwrap();
+    assert_eq!(exit_code, 0);
+
+    let runs = db::runs::list_job_runs(&conn, Some(&created.id), None, None, None)
+        .await
+        .unwrap();
+    assert_eq!(runs.len(), 1);
+
+    let hook_runs = db::runs::list_hook_runs(&conn, &runs[0].id).await.unwrap();
+    assert_eq!(hook_runs.len(), 1);
+    assert_eq!(hook_runs[0].status, HookRunStatus::Success);
+    assert!(hook_runs[0].stdout.contains("global_success_hook"));
+
+    cleanup_db(&path);
+}
+
 // Retry logic unit tests
 #[test]
 fn test_should_retry_no_retries() {

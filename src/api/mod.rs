@@ -55,6 +55,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/tasks/{id}/trigger", post(tasks::trigger_task))
         // Hooks
         .route("/api/v1/hooks", get(hooks::list_all_hooks))
+        .route("/api/v1/hooks/global", get(hooks::list_global_hooks))
+        .route("/api/v1/hooks/global", post(hooks::create_global_hook))
         .route("/api/v1/tasks/{id}/hooks", get(hooks::list_hooks))
         .route("/api/v1/tasks/{id}/hooks", post(hooks::create_hook))
         .route("/api/v1/hooks/{id}", put(hooks::update_hook))
