@@ -31,6 +31,7 @@ pub struct AppState {
     pub db: Arc<Database>,
     pub systemd: Arc<dyn SystemdManager>,
     pub config: Arc<Config>,
+    pub event_bus: crate::event_bus::EventBus,
 }
 
 /// Build the Axum router with all routes.

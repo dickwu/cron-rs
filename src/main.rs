@@ -2,6 +2,8 @@ mod api;
 mod cli;
 mod config;
 mod db;
+mod event_bus;
+mod event_poller;
 mod models;
 mod runner;
 mod systemd;
@@ -49,11 +51,20 @@ async fn main() -> anyhow::Result<()> {
             // Create systemd manager
             let systemd = systemd::Systemctl::new(&config)?;
 
+            // Real-time event bus for SSE; fed by both the in-process API
+            // handlers and a poller that watches the runs/tasks tables so
+            // we also pick up runs created by the separate `cron-rs run`
+            // process.
+            let event_bus = event_bus::new(256);
+            let db_arc = Arc::new(database);
+            event_poller::spawn(db_arc.clone(), event_bus.clone());
+
             // Create app state
             let state = api::AppState {
-                db: Arc::new(database),
+                db: db_arc,
                 systemd: Arc::new(systemd),
                 config: Arc::new(config.clone()),
+                event_bus,
             };
 
             // Build router
