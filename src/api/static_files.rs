@@ -24,7 +24,7 @@ pub async fn static_handler(request: Request) -> impl IntoResponse {
         use rust_embed::Embed;
 
         #[derive(Embed)]
-        #[folder = "../cron-rs-web/out/"]
+        #[folder = "../web/out/"]
         struct WebAssets;
 
         if let Some(resp) = serve_spa_path::<WebAssets>(path.trim_start_matches('/')) {
