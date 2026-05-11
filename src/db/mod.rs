@@ -1,6 +1,7 @@
 pub mod helpers;
 pub mod hooks;
 pub mod runs;
+pub mod settings;
 pub mod tasks;
 
 use std::path::Path;
@@ -21,6 +22,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
     (
         "003_global_hooks",
         include_str!("../../migrations/003_global_hooks.sql"),
+    ),
+    (
+        "004_settings",
+        include_str!("../../migrations/004_settings.sql"),
     ),
 ];
 

@@ -24,7 +24,7 @@ pub async fn static_handler(request: Request) -> impl IntoResponse {
         use rust_embed::Embed;
 
         #[derive(Embed)]
-        #[folder = "../cron-rs-web/out/"]
+        #[folder = "../web/out/"]
         struct WebAssets;
 
         if let Some(resp) = serve_spa_path::<WebAssets>(path.trim_start_matches('/')) {
@@ -47,11 +47,18 @@ pub async fn static_handler(request: Request) -> impl IntoResponse {
 }
 
 fn runtime_config_response(headers: &HeaderMap) -> Response {
+    let scheme = headers
+        .get("x-forwarded-proto")
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.split(',').next().unwrap_or("").trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "http".to_string());
+
     let api_url = headers
         .get(header::HOST)
         .and_then(|value| value.to_str().ok())
         .filter(|host| !host.trim().is_empty())
-        .map(|host| format!("http://{}", host.trim()))
+        .map(|host| format!("{}://{}", scheme, host.trim()))
         .unwrap_or_else(|| "http://localhost:9746".to_string());
 
     let body = format!(

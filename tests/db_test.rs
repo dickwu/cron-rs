@@ -760,3 +760,66 @@ async fn run_crud_mark_orphaned_runs_crashed() {
 
     cleanup_db(&path);
 }
+
+// Settings: default + roundtrip
+#[tokio::test]
+async fn settings_retention_default_and_roundtrip() {
+    let (database, path) = setup_db().await;
+    let conn = database.connect().await.unwrap();
+
+    // Default seeded by migration
+    let days = db::settings::get_retention_days(&conn).await.unwrap();
+    assert_eq!(days, 30);
+
+    db::settings::set_retention_days(&conn, 7).await.unwrap();
+    let days = db::settings::get_retention_days(&conn).await.unwrap();
+    assert_eq!(days, 7);
+
+    cleanup_db(&path);
+}
+
+// Prune: deletes job_runs older than the cutoff and their hook_runs.
+#[tokio::test]
+async fn prune_runs_older_than_deletes_old() {
+    let (database, path) = setup_db().await;
+    let conn = database.connect().await.unwrap();
+
+    let task = db::tasks::create(&conn, &make_test_task("prune-test", "echo hi"))
+        .await
+        .unwrap();
+
+    // Insert a stale run (started 100 days ago) directly so we can backdate it.
+    let stale_id = uuid::Uuid::new_v4().to_string();
+    conn.execute(
+        "INSERT INTO job_runs (id, task_id, started_at, finished_at, exit_code, stdout, stderr, status, attempt, duration_ms)
+         VALUES (?1, ?2, datetime('now', '-100 days'), datetime('now', '-100 days'), 0, '', '', 'success', 1, 1)",
+        libsql::params![stale_id.clone(), task.id.clone()],
+    )
+    .await
+    .unwrap();
+
+    // Insert a recent run (1 day ago) that must survive.
+    let fresh_id = uuid::Uuid::new_v4().to_string();
+    conn.execute(
+        "INSERT INTO job_runs (id, task_id, started_at, finished_at, exit_code, stdout, stderr, status, attempt, duration_ms)
+         VALUES (?1, ?2, datetime('now', '-1 days'), datetime('now', '-1 days'), 0, '', '', 'success', 1, 1)",
+        libsql::params![fresh_id.clone(), task.id.clone()],
+    )
+    .await
+    .unwrap();
+
+    // days=0 → no-op
+    let deleted = db::runs::prune_runs_older_than(&conn, 0).await.unwrap();
+    assert_eq!(deleted, 0);
+
+    let deleted = db::runs::prune_runs_older_than(&conn, 30).await.unwrap();
+    assert_eq!(deleted, 1);
+
+    let remaining = db::runs::list_job_runs(&conn, Some(&task.id), None, None, None)
+        .await
+        .unwrap();
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].id, fresh_id);
+
+    cleanup_db(&path);
+}
