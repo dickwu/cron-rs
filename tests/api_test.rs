@@ -147,6 +147,7 @@ async fn setup_app() -> (axum::Router, PathBuf, MockSystemdManager) {
         db: Arc::new(database),
         systemd: Arc::new(mock_systemd.clone()),
         config: Arc::new(config),
+        event_bus: cron_rs::event_bus::new(16),
     };
 
     let app = api::router(state);
@@ -356,7 +357,9 @@ async fn t23_crud_tasks() {
         "schedule": "*-*-* *:00:00",
         "description": "A test task",
         "max_retries": 2,
-        "retry_delay_secs": 10
+        "retry_delay_secs": 10,
+        "lock_key": " staff-api-boot ",
+        "sandbox_profile": "staff-api-hyperf"
     });
 
     let response = app
@@ -380,6 +383,11 @@ async fn t23_crud_tasks() {
     assert_eq!(created["name"].as_str().unwrap(), "test-task");
     assert_eq!(created["command"].as_str().unwrap(), "echo hello");
     assert_eq!(created["max_retries"].as_i64().unwrap(), 2);
+    assert_eq!(created["lock_key"].as_str().unwrap(), "staff-api-boot");
+    assert_eq!(
+        created["sandbox_profile"].as_str().unwrap(),
+        "staff-api-hyperf"
+    );
 
     // Verify systemd install was called
     let calls = mock.get_calls();
@@ -431,7 +439,9 @@ async fn t23_crud_tasks() {
     // --- UPDATE ---
     let update_body = serde_json::json!({
         "command": "echo updated",
-        "description": "Updated description"
+        "description": "Updated description",
+        "lock_key": null,
+        "sandbox_profile": null
     });
 
     let response = app
@@ -456,6 +466,8 @@ async fn t23_crud_tasks() {
         updated["description"].as_str().unwrap(),
         "Updated description"
     );
+    assert!(updated["lock_key"].is_null());
+    assert!(updated["sandbox_profile"].is_null());
     // Name should be unchanged
     assert_eq!(updated["name"].as_str().unwrap(), "test-task");
 

@@ -96,7 +96,11 @@ pub enum Commands {
     Doctor,
 
     /// Regenerate systemd units from DB
-    Regenerate,
+    Regenerate {
+        /// Rewrite every unit file; currently this is the default behavior.
+        #[arg(long)]
+        rewrite_all: bool,
+    },
 
     /// Internal: run a task (called by systemd service units)
     Run {
@@ -164,6 +168,10 @@ pub enum TaskCommands {
         timeout_secs: Option<i32>,
         #[arg(long)]
         concurrency_policy: Option<String>,
+        #[arg(long)]
+        lock_key: Option<String>,
+        #[arg(long)]
+        sandbox_profile: Option<String>,
     },
     /// Show a task by name or id
     Show { name_or_id: String },
@@ -184,6 +192,14 @@ pub enum TaskCommands {
         timeout_secs: Option<i32>,
         #[arg(long)]
         concurrency_policy: Option<String>,
+        #[arg(long, conflicts_with = "no_lock_key")]
+        lock_key: Option<String>,
+        #[arg(long)]
+        no_lock_key: bool,
+        #[arg(long, conflicts_with = "no_sandbox_profile")]
+        sandbox_profile: Option<String>,
+        #[arg(long)]
+        no_sandbox_profile: bool,
     },
     /// Delete a task
     Delete { name_or_id: String },

@@ -27,6 +27,14 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "004_settings",
         include_str!("../../migrations/004_settings.sql"),
     ),
+    (
+        "005_task_lock_key",
+        include_str!("../../migrations/005_task_lock_key.sql"),
+    ),
+    (
+        "006_task_sandbox_profile",
+        include_str!("../../migrations/006_task_sandbox_profile.sql"),
+    ),
 ];
 
 struct DatabaseInner {

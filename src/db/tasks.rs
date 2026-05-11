@@ -34,8 +34,8 @@ pub async fn create(conn: &Connection, task: &Task) -> Result<Task, DbError> {
     let tags_json = tags_to_json(&task.tags)?;
 
     conn.execute(
-        "INSERT INTO tasks (id, name, command, schedule, description, enabled, max_retries, retry_delay_secs, timeout_secs, concurrency_policy, created_at, updated_at, tags)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+        "INSERT INTO tasks (id, name, command, schedule, description, enabled, max_retries, retry_delay_secs, timeout_secs, concurrency_policy, created_at, updated_at, tags, lock_key, sandbox_profile)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         libsql::params![
             id.clone(),
             task.name.clone(),
@@ -49,7 +49,9 @@ pub async fn create(conn: &Connection, task: &Task) -> Result<Task, DbError> {
             task.concurrency_policy.to_string(),
             created_at,
             updated_at,
-            tags_json
+            tags_json,
+            task.lock_key.clone(),
+            task.sandbox_profile.clone()
         ],
     )
     .await
@@ -68,7 +70,7 @@ pub async fn create(conn: &Connection, task: &Task) -> Result<Task, DbError> {
 pub async fn get_by_id(conn: &Connection, id: &str) -> Result<Task, DbError> {
     let mut rows = conn
         .query(
-            "SELECT id, name, command, schedule, description, enabled, max_retries, retry_delay_secs, timeout_secs, concurrency_policy, created_at, updated_at, tags
+            "SELECT id, name, command, schedule, description, enabled, max_retries, retry_delay_secs, timeout_secs, concurrency_policy, created_at, updated_at, tags, lock_key, sandbox_profile
              FROM tasks WHERE id = ?1",
             [id],
         )
@@ -84,7 +86,7 @@ pub async fn get_by_id(conn: &Connection, id: &str) -> Result<Task, DbError> {
 pub async fn get_by_name(conn: &Connection, name: &str) -> Result<Task, DbError> {
     let mut rows = conn
         .query(
-            "SELECT id, name, command, schedule, description, enabled, max_retries, retry_delay_secs, timeout_secs, concurrency_policy, created_at, updated_at, tags
+            "SELECT id, name, command, schedule, description, enabled, max_retries, retry_delay_secs, timeout_secs, concurrency_policy, created_at, updated_at, tags, lock_key, sandbox_profile
              FROM tasks WHERE name = ?1",
             [name],
         )
@@ -100,7 +102,7 @@ pub async fn get_by_name(conn: &Connection, name: &str) -> Result<Task, DbError>
 pub async fn list(conn: &Connection) -> Result<Vec<Task>, DbError> {
     let mut rows = conn
         .query(
-            "SELECT id, name, command, schedule, description, enabled, max_retries, retry_delay_secs, timeout_secs, concurrency_policy, created_at, updated_at, tags
+            "SELECT id, name, command, schedule, description, enabled, max_retries, retry_delay_secs, timeout_secs, concurrency_policy, created_at, updated_at, tags, lock_key, sandbox_profile
              FROM tasks ORDER BY name",
             (),
         )
@@ -136,7 +138,9 @@ pub async fn update(conn: &Connection, task: &Task) -> Result<Task, DbError> {
                 timeout_secs = ?9,
                 concurrency_policy = ?10,
                 updated_at = ?11,
-                tags = ?12
+                tags = ?12,
+                lock_key = ?13,
+                sandbox_profile = ?14
              WHERE id = ?1",
             libsql::params![
                 task.id.clone(),
@@ -150,7 +154,9 @@ pub async fn update(conn: &Connection, task: &Task) -> Result<Task, DbError> {
                 timeout_val,
                 task.concurrency_policy.to_string(),
                 now,
-                tags_json
+                tags_json,
+                task.lock_key.clone(),
+                task.sandbox_profile.clone()
             ],
         )
         .await

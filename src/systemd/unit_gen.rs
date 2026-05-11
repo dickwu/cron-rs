@@ -1,4 +1,5 @@
 use crate::models::Task;
+use std::path::{Path, PathBuf};
 
 /// Sanitize a task name into a valid systemd unit name component.
 /// Replace any char that isn't alphanumeric, dash, or underscore with a dash.
@@ -33,6 +34,87 @@ pub fn daemon_service_filename() -> &'static str {
     "cron-rs-daemon.service"
 }
 
+pub const LOCK_DIR: &str = "/run/cron-rs/locks";
+pub const DEFAULT_LOCK_WAIT_SECS: u32 = 120;
+pub const STAFF_API_HYPERF_SANDBOX: &str = "staff-api-hyperf";
+
+/// Sanitize a lock key into a stable lock file name component.
+/// Lock keys intentionally keep underscores, unlike systemd unit names.
+pub fn safe_lock_key(key: &str) -> String {
+    key.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+/// Resolve a task lock key to its shared flock path.
+pub fn lock_path(key: &str) -> PathBuf {
+    PathBuf::from(LOCK_DIR).join(format!("{}.lock", safe_lock_key(key)))
+}
+
+/// Ensure the volatile lock directory exists.
+///
+/// The sticky world-writable mode lets root-managed units and app-specific
+/// service users share zero-byte lock files without requiring a deployment
+/// specific cron-rs group.
+pub fn ensure_lock_dir() -> anyhow::Result<()> {
+    std::fs::create_dir_all(LOCK_DIR)?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(LOCK_DIR, std::fs::Permissions::from_mode(0o1777))?;
+    }
+
+    Ok(())
+}
+
+pub fn supported_sandbox_profiles() -> &'static [&'static str] {
+    &[STAFF_API_HYPERF_SANDBOX]
+}
+
+pub fn is_supported_sandbox_profile(profile: &str) -> bool {
+    supported_sandbox_profiles().contains(&profile)
+}
+
+fn writable_db_dir(db_path: &str) -> String {
+    Path::new(db_path)
+        .parent()
+        .unwrap_or_else(|| Path::new("/root/cron-rs"))
+        .display()
+        .to_string()
+}
+
+fn sandbox_profile_content(profile: &str, db_path: &str) -> Option<String> {
+    match profile {
+        STAFF_API_HYPERF_SANDBOX => Some(format!(
+            "WorkingDirectory=/server/staff-api\n\
+             NoNewPrivileges=true\n\
+             PrivateTmp=true\n\
+             PrivateDevices=true\n\
+             ProtectSystem=strict\n\
+             ProtectKernelTunables=true\n\
+             ProtectKernelModules=true\n\
+             ProtectControlGroups=true\n\
+             ProtectClock=true\n\
+             ProtectHostname=true\n\
+             RestrictSUIDSGID=true\n\
+             RestrictRealtime=true\n\
+             LockPersonality=true\n\
+             SystemCallArchitectures=native\n\
+             ReadWritePaths={} {} /server/staff-api/runtime\n",
+            writable_db_dir(db_path),
+            LOCK_DIR
+        )),
+        _ => None,
+    }
+}
+
 /// Generate the content of a systemd .timer unit file for the given task.
 #[allow(dead_code)]
 pub fn generate_timer_unit(task: &Task) -> String {
@@ -47,7 +129,7 @@ pub fn generate_service_unit(task: &Task, db_path: &str) -> String {
         .unwrap_or_else(|_| std::path::PathBuf::from("cron-rs"))
         .to_string_lossy()
         .to_string();
-    generate_service(&task.name, &task.id, &binary_path, db_path)
+    generate_service_for_task(task, &binary_path, db_path)
 }
 
 /// Generate a .timer unit file content from raw parameters.
@@ -66,20 +148,63 @@ pub fn generate_timer(task_name: &str, schedule: &str) -> String {
 }
 
 /// Generate a .service unit file content from raw parameters.
+#[allow(dead_code)]
 pub fn generate_service(
     task_name: &str,
     task_id: &str,
     binary_path: &str,
     db_path: &str,
 ) -> String {
+    generate_service_with_options(task_name, task_id, binary_path, db_path, None, None)
+}
+
+/// Generate a .service unit file content for a task, including optional lock wrapping.
+pub fn generate_service_for_task(task: &Task, binary_path: &str, db_path: &str) -> String {
+    generate_service_with_options(
+        &task.name,
+        &task.id,
+        binary_path,
+        db_path,
+        task.lock_key.as_deref(),
+        task.sandbox_profile.as_deref(),
+    )
+}
+
+/// Generate a .service unit file content from raw parameters with optional flock wrapping.
+pub fn generate_service_with_options(
+    task_name: &str,
+    task_id: &str,
+    binary_path: &str,
+    db_path: &str,
+    lock_key: Option<&str>,
+    sandbox_profile: Option<&str>,
+) -> String {
+    let run_command = format!(
+        "{binary_path} run --task-id {task_id} --task-name {task_name} --db-path {db_path}"
+    );
+    let exec_start = match lock_key {
+        Some(key) if !key.trim().is_empty() => {
+            let path = lock_path(key);
+            format!(
+                "/usr/bin/flock --exclusive --wait {DEFAULT_LOCK_WAIT_SECS} {} {run_command}",
+                path.display()
+            )
+        }
+        _ => run_command,
+    };
+    let sandbox = sandbox_profile
+        .and_then(|profile| sandbox_profile_content(profile, db_path))
+        .unwrap_or_default();
+
     format!(
         "[Unit]\n\
          Description=cron-rs task: {task_name}\n\
          \n\
          [Service]\n\
          Type=oneshot\n\
-         ExecStart={binary_path} run --task-id {task_id} --task-name {task_name} --db-path {db_path}\n\
+         ExecStart={exec_start}\n\
          Environment=CRON_RS_DB={db_path}\n\
+         {sandbox}\
          TimeoutStartSec=infinity\n"
     )
 }
@@ -145,6 +270,14 @@ mod tests {
     }
 
     #[test]
+    fn test_lock_path_sanitizes_key() {
+        assert_eq!(
+            lock_path("staff api/boot").display().to_string(),
+            "/run/cron-rs/locks/staff_api_boot.lock"
+        );
+    }
+
+    #[test]
     fn test_generate_timer() {
         let content = generate_timer("backup", "*-*-* 02:00:00");
         assert!(content.contains("Description=cron-rs timer: backup"));
@@ -166,5 +299,35 @@ mod tests {
         assert!(content.contains("ExecStart=/usr/bin/cron-rs run --task-id abc-123 --task-name backup --db-path /home/user/cron-rs.db"));
         assert!(content.contains("Environment=CRON_RS_DB=/home/user/cron-rs.db"));
         assert!(content.contains("TimeoutStartSec=infinity"));
+    }
+
+    #[test]
+    fn test_generate_service_with_lock() {
+        let content = generate_service_with_options(
+            "backup",
+            "abc-123",
+            "/usr/bin/cron-rs",
+            "/home/user/cron-rs.db",
+            Some("staff-api-boot"),
+            None,
+        );
+        assert!(content.contains("ExecStart=/usr/bin/flock --exclusive --wait 120 /run/cron-rs/locks/staff-api-boot.lock /usr/bin/cron-rs run --task-id abc-123 --task-name backup --db-path /home/user/cron-rs.db"));
+    }
+
+    #[test]
+    fn test_generate_service_with_staff_api_hyperf_sandbox() {
+        let content = generate_service_with_options(
+            "sync-patient",
+            "abc-123",
+            "/usr/bin/cron-rs",
+            "/root/cron-rs/cron-rs.db",
+            Some("staff-api-boot"),
+            Some(STAFF_API_HYPERF_SANDBOX),
+        );
+
+        assert!(content.contains("WorkingDirectory=/server/staff-api"));
+        assert!(content.contains("ProtectSystem=strict"));
+        assert!(content
+            .contains("ReadWritePaths=/root/cron-rs /run/cron-rs/locks /server/staff-api/runtime"));
     }
 }

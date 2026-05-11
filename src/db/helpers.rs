@@ -38,6 +38,8 @@ impl FromRow for Task {
             .unwrap_or_else(|| "[]".to_string());
         let tags = serde_json::from_str::<Vec<String>>(&tags_json)
             .map_err(|e| DbError::QueryError(format!("invalid task tags JSON: {e}")))?;
+        let lock_key = row.get::<Option<String>>(13)?;
+        let sandbox_profile = row.get::<Option<String>>(14)?;
 
         Ok(Task {
             id: row.get::<String>(0)?,
@@ -50,6 +52,8 @@ impl FromRow for Task {
             retry_delay_secs: row.get::<i32>(7)?,
             timeout_secs: row.get::<Option<i32>>(8)?,
             concurrency_policy,
+            lock_key,
+            sandbox_profile,
             created_at: row.get::<String>(10)?,
             updated_at: row.get::<String>(11)?,
             tags,

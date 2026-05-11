@@ -24,7 +24,10 @@ fn token_path() -> PathBuf {
 
 /// Read the saved token, or None if not available.
 fn read_token() -> Option<String> {
-    std::fs::read_to_string(token_path()).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+    std::fs::read_to_string(token_path())
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 /// Save a token to disk.
@@ -82,7 +85,9 @@ async fn ensure_token(base_url: &str, client: &reqwest::Client) -> anyhow::Resul
         let body: serde_json::Value = resp.json().await.unwrap_or_default();
         anyhow::bail!(
             "Login failed: {}",
-            body.get("error").and_then(|e| e.as_str()).unwrap_or("unknown error")
+            body.get("error")
+                .and_then(|e| e.as_str())
+                .unwrap_or("unknown error")
         );
     }
 
@@ -158,7 +163,10 @@ fn print_task_table(tasks: &[serde_json::Value]) {
     for task in tasks {
         let id = task.get("id").and_then(|v| v.as_str()).unwrap_or("-");
         let name = task.get("name").and_then(|v| v.as_str()).unwrap_or("-");
-        let enabled = task.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
+        let enabled = task
+            .get("enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         let schedule = task.get("schedule").and_then(|v| v.as_str()).unwrap_or("-");
         let command = task.get("command").and_then(|v| v.as_str()).unwrap_or("-");
 
@@ -179,19 +187,83 @@ fn print_task_table(tasks: &[serde_json::Value]) {
 /// Format a single task for detailed display.
 fn print_task_detail(task: &serde_json::Value) {
     println!("Task Details:");
-    println!("  ID:                 {}", task.get("id").and_then(|v| v.as_str()).unwrap_or("-"));
-    println!("  Name:               {}", task.get("name").and_then(|v| v.as_str()).unwrap_or("-"));
-    println!("  Command:            {}", task.get("command").and_then(|v| v.as_str()).unwrap_or("-"));
-    println!("  Schedule:           {}", task.get("schedule").and_then(|v| v.as_str()).unwrap_or("-"));
-    println!("  Description:        {}", task.get("description").and_then(|v| v.as_str()).unwrap_or("-"));
-    println!("  Enabled:            {}", task.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false));
-    println!("  Max Retries:        {}", task.get("max_retries").and_then(|v| v.as_i64()).unwrap_or(0));
-    println!("  Retry Delay (s):    {}", task.get("retry_delay_secs").and_then(|v| v.as_i64()).unwrap_or(0));
+    println!(
+        "  ID:                 {}",
+        task.get("id").and_then(|v| v.as_str()).unwrap_or("-")
+    );
+    println!(
+        "  Name:               {}",
+        task.get("name").and_then(|v| v.as_str()).unwrap_or("-")
+    );
+    println!(
+        "  Command:            {}",
+        task.get("command").and_then(|v| v.as_str()).unwrap_or("-")
+    );
+    println!(
+        "  Schedule:           {}",
+        task.get("schedule").and_then(|v| v.as_str()).unwrap_or("-")
+    );
+    println!(
+        "  Description:        {}",
+        task.get("description")
+            .and_then(|v| v.as_str())
+            .unwrap_or("-")
+    );
+    println!(
+        "  Enabled:            {}",
+        task.get("enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    );
+    println!(
+        "  Max Retries:        {}",
+        task.get("max_retries")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0)
+    );
+    println!(
+        "  Retry Delay (s):    {}",
+        task.get("retry_delay_secs")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0)
+    );
     let timeout = task.get("timeout_secs").and_then(|v| v.as_i64());
-    println!("  Timeout (s):        {}", timeout.map(|v| v.to_string()).unwrap_or_else(|| "none".to_string()));
-    println!("  Concurrency Policy: {}", task.get("concurrency_policy").and_then(|v| v.as_str()).unwrap_or("-"));
-    println!("  Created At:         {}", task.get("created_at").and_then(|v| v.as_str()).unwrap_or("-"));
-    println!("  Updated At:         {}", task.get("updated_at").and_then(|v| v.as_str()).unwrap_or("-"));
+    println!(
+        "  Timeout (s):        {}",
+        timeout
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "none".to_string())
+    );
+    println!(
+        "  Concurrency Policy: {}",
+        task.get("concurrency_policy")
+            .and_then(|v| v.as_str())
+            .unwrap_or("-")
+    );
+    println!(
+        "  Lock Key:           {}",
+        task.get("lock_key")
+            .and_then(|v| v.as_str())
+            .unwrap_or("none")
+    );
+    println!(
+        "  Sandbox Profile:    {}",
+        task.get("sandbox_profile")
+            .and_then(|v| v.as_str())
+            .unwrap_or("none")
+    );
+    println!(
+        "  Created At:         {}",
+        task.get("created_at")
+            .and_then(|v| v.as_str())
+            .unwrap_or("-")
+    );
+    println!(
+        "  Updated At:         {}",
+        task.get("updated_at")
+            .and_then(|v| v.as_str())
+            .unwrap_or("-")
+    );
 }
 
 /// Convert a DB Task to a serde_json::Value for uniform display.
@@ -207,6 +279,8 @@ fn task_to_json(task: &Task) -> serde_json::Value {
         "retry_delay_secs": task.retry_delay_secs,
         "timeout_secs": task.timeout_secs,
         "concurrency_policy": task.concurrency_policy.to_string(),
+        "lock_key": task.lock_key,
+        "sandbox_profile": task.sandbox_profile,
         "created_at": task.created_at,
         "updated_at": task.updated_at,
     })
@@ -227,6 +301,8 @@ pub async fn handle_task_command(cmd: TaskCommands) -> anyhow::Result<()> {
             retry_delay_secs,
             timeout_secs,
             concurrency_policy,
+            lock_key,
+            sandbox_profile,
         } => {
             task_create(
                 &config,
@@ -238,6 +314,8 @@ pub async fn handle_task_command(cmd: TaskCommands) -> anyhow::Result<()> {
                 retry_delay_secs,
                 timeout_secs,
                 concurrency_policy.as_deref(),
+                lock_key.as_deref(),
+                sandbox_profile.as_deref(),
             )
             .await
         }
@@ -251,6 +329,10 @@ pub async fn handle_task_command(cmd: TaskCommands) -> anyhow::Result<()> {
             retry_delay_secs,
             timeout_secs,
             concurrency_policy,
+            lock_key,
+            no_lock_key,
+            sandbox_profile,
+            no_sandbox_profile,
         } => {
             task_edit(
                 &config,
@@ -262,6 +344,10 @@ pub async fn handle_task_command(cmd: TaskCommands) -> anyhow::Result<()> {
                 retry_delay_secs,
                 timeout_secs,
                 concurrency_policy.as_deref(),
+                lock_key.as_deref(),
+                no_lock_key,
+                sandbox_profile.as_deref(),
+                no_sandbox_profile,
             )
             .await
         }
@@ -305,7 +391,9 @@ async fn task_list(config: &Config) -> anyhow::Result<()> {
                 let body: serde_json::Value = resp.json().await.unwrap_or_default();
                 eprintln!(
                     "Error: {}",
-                    body.get("error").and_then(|e| e.as_str()).unwrap_or("unknown error")
+                    body.get("error")
+                        .and_then(|e| e.as_str())
+                        .unwrap_or("unknown error")
                 );
             }
             Ok(())
@@ -335,6 +423,8 @@ async fn task_create(
     retry_delay_secs: Option<i32>,
     timeout_secs: Option<i32>,
     concurrency_policy: Option<&str>,
+    lock_key: Option<&str>,
+    sandbox_profile: Option<&str>,
 ) -> anyhow::Result<()> {
     let (base_url, client) = api_client(config);
     let token = ensure_token(&base_url, &client).await?;
@@ -360,6 +450,12 @@ async fn task_create(
     if let Some(cp) = concurrency_policy {
         body["concurrency_policy"] = serde_json::json!(cp);
     }
+    if let Some(key) = lock_key {
+        body["lock_key"] = serde_json::json!(key);
+    }
+    if let Some(profile) = sandbox_profile {
+        body["sandbox_profile"] = serde_json::json!(profile);
+    }
 
     let resp = client
         .post(format!("{}/api/v1/tasks", base_url))
@@ -376,7 +472,9 @@ async fn task_create(
         let body: serde_json::Value = resp.json().await.unwrap_or_default();
         anyhow::bail!(
             "Failed to create task: {}",
-            body.get("error").and_then(|e| e.as_str()).unwrap_or("unknown error")
+            body.get("error")
+                .and_then(|e| e.as_str())
+                .unwrap_or("unknown error")
         );
     }
 
@@ -423,7 +521,9 @@ async fn task_show(config: &Config, name_or_id: &str) -> anyhow::Result<()> {
                 let body: serde_json::Value = resp.json().await.unwrap_or_default();
                 anyhow::bail!(
                     "Error: {}",
-                    body.get("error").and_then(|e| e.as_str()).unwrap_or("unknown error")
+                    body.get("error")
+                        .and_then(|e| e.as_str())
+                        .unwrap_or("unknown error")
                 );
             }
             Ok(())
@@ -465,6 +565,10 @@ async fn task_edit(
     retry_delay_secs: Option<i32>,
     timeout_secs: Option<i32>,
     concurrency_policy: Option<&str>,
+    lock_key: Option<&str>,
+    no_lock_key: bool,
+    sandbox_profile: Option<&str>,
+    no_sandbox_profile: bool,
 ) -> anyhow::Result<()> {
     let (base_url, client) = api_client(config);
     let token = ensure_token(&base_url, &client).await?;
@@ -492,6 +596,16 @@ async fn task_edit(
     if let Some(cp) = concurrency_policy {
         body.insert("concurrency_policy".to_string(), serde_json::json!(cp));
     }
+    if no_lock_key {
+        body.insert("lock_key".to_string(), serde_json::Value::Null);
+    } else if let Some(key) = lock_key {
+        body.insert("lock_key".to_string(), serde_json::json!(key));
+    }
+    if no_sandbox_profile {
+        body.insert("sandbox_profile".to_string(), serde_json::Value::Null);
+    } else if let Some(profile) = sandbox_profile {
+        body.insert("sandbox_profile".to_string(), serde_json::json!(profile));
+    }
 
     let resp = client
         .put(format!("{}/api/v1/tasks/{}", base_url, task_id))
@@ -508,7 +622,9 @@ async fn task_edit(
         let body: serde_json::Value = resp.json().await.unwrap_or_default();
         anyhow::bail!(
             "Failed to update task: {}",
-            body.get("error").and_then(|e| e.as_str()).unwrap_or("unknown error")
+            body.get("error")
+                .and_then(|e| e.as_str())
+                .unwrap_or("unknown error")
         );
     }
 
@@ -533,7 +649,9 @@ async fn task_delete(config: &Config, name_or_id: &str) -> anyhow::Result<()> {
         let body: serde_json::Value = resp.json().await.unwrap_or_default();
         anyhow::bail!(
             "Failed to delete task: {}",
-            body.get("error").and_then(|e| e.as_str()).unwrap_or("unknown error")
+            body.get("error")
+                .and_then(|e| e.as_str())
+                .unwrap_or("unknown error")
         );
     }
 
@@ -558,7 +676,9 @@ async fn task_enable(config: &Config, name_or_id: &str) -> anyhow::Result<()> {
         let body: serde_json::Value = resp.json().await.unwrap_or_default();
         anyhow::bail!(
             "Failed to enable task: {}",
-            body.get("error").and_then(|e| e.as_str()).unwrap_or("unknown error")
+            body.get("error")
+                .and_then(|e| e.as_str())
+                .unwrap_or("unknown error")
         );
     }
 
@@ -583,7 +703,9 @@ async fn task_disable(config: &Config, name_or_id: &str) -> anyhow::Result<()> {
         let body: serde_json::Value = resp.json().await.unwrap_or_default();
         anyhow::bail!(
             "Failed to disable task: {}",
-            body.get("error").and_then(|e| e.as_str()).unwrap_or("unknown error")
+            body.get("error")
+                .and_then(|e| e.as_str())
+                .unwrap_or("unknown error")
         );
     }
 
@@ -608,7 +730,9 @@ async fn task_trigger(config: &Config, name_or_id: &str) -> anyhow::Result<()> {
         let body: serde_json::Value = resp.json().await.unwrap_or_default();
         anyhow::bail!(
             "Failed to trigger task: {}",
-            body.get("error").and_then(|e| e.as_str()).unwrap_or("unknown error")
+            body.get("error")
+                .and_then(|e| e.as_str())
+                .unwrap_or("unknown error")
         );
     }
 
@@ -632,11 +756,17 @@ pub async fn show_status(config: &Config) -> anyhow::Result<()> {
             println!("=== cron-rs status ===");
             println!(
                 "  Tasks:              {}",
-                status.get("task_count").and_then(|v| v.as_i64()).unwrap_or(0)
+                status
+                    .get("task_count")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0)
             );
             println!(
                 "  Active Timers:      {}",
-                status.get("active_timers").and_then(|v| v.as_i64()).unwrap_or(0)
+                status
+                    .get("active_timers")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0)
             );
             println!(
                 "  Failures (24h):     {}",
@@ -659,11 +789,17 @@ pub async fn show_status(config: &Config) -> anyhow::Result<()> {
                 println!("=== cron-rs status ===");
                 println!(
                     "  Tasks:              {}",
-                    status.get("task_count").and_then(|v| v.as_i64()).unwrap_or(0)
+                    status
+                        .get("task_count")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0)
                 );
                 println!(
                     "  Active Timers:      {}",
-                    status.get("active_timers").and_then(|v| v.as_i64()).unwrap_or(0)
+                    status
+                        .get("active_timers")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0)
                 );
                 println!(
                     "  Failures (24h):     {}",
@@ -686,9 +822,10 @@ pub async fn show_status(config: &Config) -> anyhow::Result<()> {
             let tasks = db::tasks::list(&conn).await.unwrap_or_default();
             let enabled_count = tasks.iter().filter(|t| t.enabled).count();
 
-            let failures = db::runs::list_job_runs(&conn, None, Some("failed"), Some(1000), Some(0))
-                .await
-                .unwrap_or_default();
+            let failures =
+                db::runs::list_job_runs(&conn, None, Some("failed"), Some(1000), Some(0))
+                    .await
+                    .unwrap_or_default();
             let cutoff = chrono::Utc::now() - chrono::Duration::hours(24);
             let cutoff_str = cutoff.format("%Y-%m-%d %H:%M:%S").to_string();
             let recent_failures = failures

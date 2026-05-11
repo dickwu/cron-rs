@@ -37,6 +37,8 @@ The **daemon** exposes the API and manages systemd unit files. When a timer fire
 - **Embedded web dashboard** -- serve the management UI from the daemon on the same host/port
 - **Retry with backoff** -- configurable max retries and delay
 - **Concurrency control** -- skip, queue, or allow parallel runs
+- **Shared lock keys** -- optional `flock` guards for tasks that must not overlap app boot/cache generation
+- **Systemd sandbox profiles** -- optional hardening for tasks that should only write approved paths
 - **SQLite via libsql** -- zero-config embedded database
 - **SSE real-time events** -- stream task and run state changes to clients
 - **Schedule preview** -- validate OnCalendar expressions via `systemd-analyze`
@@ -100,6 +102,7 @@ cargo install --git https://github.com/dickwu/cron-rs
 | `cron-rs status` | Show status of all tasks |
 | `cron-rs doctor` | Diagnose common issues |
 | `cron-rs regenerate` | Regenerate systemd units from DB |
+| `cron-rs regenerate --rewrite-all` | Explicitly rewrite every generated systemd unit |
 | `cron-rs task list` | List all tasks |
 | `cron-rs task create <name>` | Create a task (`--command`, `--schedule`) |
 | `cron-rs task show <name\|id>` | Show task details |
@@ -171,6 +174,57 @@ start its own timers.
 Cron lines with both day-of-month and day-of-week restrictions are skipped
 because cron treats those fields as an OR, while one systemd `OnCalendar`
 expression cannot preserve that behavior safely.
+
+## PHP/Hyperf Integration Notes
+
+Hyperf writes `runtime/container/` scan-cache files during boot. Older Hyperf
+versions write these files non-atomically, so a long-running Swoole service and
+a cron-rs PHP oneshot can race during cold boot. Set the same `lock_key` on all
+Hyperf-related tasks so generated units use a shared `flock`:
+
+```bash
+cron-rs task edit staff-api-sync-patient-increment --lock-key staff-api-boot
+cron-rs task edit staff-api-sync-patient-increment --sandbox-profile staff-api-hyperf
+cron-rs regenerate --rewrite-all
+```
+
+With a lock key set, the generated service wraps `cron-rs run`:
+
+```ini
+ExecStart=/usr/bin/flock --exclusive --wait 120 /run/cron-rs/locks/staff-api-boot.lock \
+          /path/to/cron-rs run --task-id ... --task-name ... --db-path ...
+```
+
+The daemon creates `/run/cron-rs/locks` on startup. The directory is volatile
+and only stores zero-byte lock sentinels.
+
+For Hyperf tasks, `--sandbox-profile staff-api-hyperf` adds systemd hardening to
+the generated service. It keeps the service read-only by default while allowing
+writes to:
+
+- the cron-rs database directory, for run records and concurrency locks
+- `/run/cron-rs/locks`, for shared boot locks
+- `/server/staff-api/runtime`, for Hyperf's runtime/cache files
+
+The profile also enables settings such as `NoNewPrivileges=true`,
+`PrivateTmp=true`, `PrivateDevices=true`, and `ProtectSystem=strict`.
+
+The Swoole master service is outside cron-rs, so it must participate in the
+same lock once:
+
+```ini
+# /etc/systemd/system/staff-api.service
+[Service]
+ExecStartPre=/usr/bin/flock --exclusive --wait 120 \
+             /run/cron-rs/locks/staff-api-boot.lock \
+             /usr/bin/php /server/staff-api/bin/hyperf.php list >/dev/null
+ExecStart=/usr/bin/php /server/staff-api/bin/hyperf.php start
+```
+
+`bin/hyperf.php list` warms the scan cache while holding the lock. The actual
+Swoole `ExecStart` then boots against a hot cache. `cron-rs doctor` warns when
+Hyperf-looking tasks do not have a lock key, and when the `staff-api-boot`
+companion service lock is missing.
 
 ## Web Dashboard
 

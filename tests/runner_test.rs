@@ -45,6 +45,8 @@ fn make_test_task(name: &str, command: &str) -> Task {
         retry_delay_secs: 5,
         timeout_secs: None,
         concurrency_policy: ConcurrencyPolicy::Skip,
+        lock_key: None,
+        sandbox_profile: None,
         created_at: String::new(),
         updated_at: String::new(),
     }

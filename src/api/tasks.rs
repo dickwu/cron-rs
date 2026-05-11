@@ -4,7 +4,7 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::json;
 use tracing::{error, info};
 
@@ -13,6 +13,7 @@ use crate::db;
 use crate::db::helpers::DbError;
 use crate::models::task::ConcurrencyPolicy;
 use crate::models::Task;
+use crate::systemd::unit_gen;
 
 // --- Request/Response types ---
 
@@ -27,6 +28,34 @@ pub struct CreateTaskRequest {
     pub retry_delay_secs: Option<i32>,
     pub timeout_secs: Option<i32>,
     pub concurrency_policy: Option<String>,
+    pub lock_key: Option<String>,
+    pub sandbox_profile: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+enum OptionalStringUpdate {
+    Missing,
+    Clear,
+    Set(String),
+}
+
+impl Default for OptionalStringUpdate {
+    fn default() -> Self {
+        Self::Missing
+    }
+}
+
+impl<'de> Deserialize<'de> for OptionalStringUpdate {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = Option::<String>::deserialize(deserializer)?;
+        Ok(match value {
+            Some(value) => Self::Set(value),
+            None => Self::Clear,
+        })
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -40,6 +69,10 @@ pub struct UpdateTaskRequest {
     pub retry_delay_secs: Option<i32>,
     pub timeout_secs: Option<i32>,
     pub concurrency_policy: Option<String>,
+    #[serde(default)]
+    lock_key: OptionalStringUpdate,
+    #[serde(default)]
+    sandbox_profile: OptionalStringUpdate,
 }
 
 #[derive(Debug, Serialize)]
@@ -55,6 +88,8 @@ pub struct TaskResponse {
     pub retry_delay_secs: i32,
     pub timeout_secs: Option<i32>,
     pub concurrency_policy: ConcurrencyPolicy,
+    pub lock_key: Option<String>,
+    pub sandbox_profile: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -73,6 +108,8 @@ impl From<Task> for TaskResponse {
             retry_delay_secs: t.retry_delay_secs,
             timeout_secs: t.timeout_secs,
             concurrency_policy: t.concurrency_policy,
+            lock_key: t.lock_key,
+            sandbox_profile: t.sandbox_profile,
             created_at: t.created_at,
             updated_at: t.updated_at,
         }
@@ -114,6 +151,38 @@ fn normalize_tags(tags: Vec<String>) -> Vec<String> {
     }
 
     normalized
+}
+
+fn normalize_lock_key(lock_key: Option<String>) -> Option<String> {
+    lock_key
+        .map(|key| key.trim().to_string())
+        .filter(|key| !key.is_empty())
+}
+
+fn normalize_sandbox_profile(profile: Option<String>) -> Result<Option<String>, String> {
+    match profile
+        .map(|profile| profile.trim().to_string())
+        .filter(|profile| !profile.is_empty())
+    {
+        Some(profile) if unit_gen::is_supported_sandbox_profile(&profile) => Ok(Some(profile)),
+        Some(profile) => Err(format!("unsupported sandbox_profile: {profile}")),
+        None => Ok(None),
+    }
+}
+
+fn parse_optional_string_update(
+    value: OptionalStringUpdate,
+    field: &str,
+) -> Result<Option<Option<String>>, String> {
+    match value {
+        OptionalStringUpdate::Missing => Ok(None),
+        OptionalStringUpdate::Clear => Ok(Some(None)),
+        OptionalStringUpdate::Set(value) => {
+            let normalized = normalize_lock_key(Some(value))
+                .ok_or_else(|| format!("{field} cannot be empty"))?;
+            Ok(Some(Some(normalized)))
+        }
+    }
 }
 
 // --- Handlers ---
@@ -175,6 +244,13 @@ pub async fn create_task(
         retry_delay_secs: body.retry_delay_secs.unwrap_or(5),
         timeout_secs: body.timeout_secs,
         concurrency_policy,
+        lock_key: normalize_lock_key(body.lock_key),
+        sandbox_profile: match normalize_sandbox_profile(body.sandbox_profile) {
+            Ok(profile) => profile,
+            Err(e) => {
+                return (StatusCode::BAD_REQUEST, Json(json!({"error": e}))).into_response();
+            }
+        },
         created_at: String::new(),
         updated_at: String::new(),
     };
@@ -292,6 +368,26 @@ pub async fn update_task(
         retry_delay_secs: body.retry_delay_secs.unwrap_or(existing.retry_delay_secs),
         timeout_secs: body.timeout_secs.or(existing.timeout_secs),
         concurrency_policy,
+        lock_key: match parse_optional_string_update(body.lock_key, "lock_key") {
+            Ok(Some(lock_key)) => lock_key,
+            Ok(None) => existing.lock_key,
+            Err(e) => {
+                return (StatusCode::BAD_REQUEST, Json(json!({"error": e}))).into_response();
+            }
+        },
+        sandbox_profile: match parse_optional_string_update(body.sandbox_profile, "sandbox_profile")
+        {
+            Ok(Some(profile)) => match normalize_sandbox_profile(profile) {
+                Ok(profile) => profile,
+                Err(e) => {
+                    return (StatusCode::BAD_REQUEST, Json(json!({"error": e}))).into_response();
+                }
+            },
+            Ok(None) => existing.sandbox_profile,
+            Err(e) => {
+                return (StatusCode::BAD_REQUEST, Json(json!({"error": e}))).into_response();
+            }
+        },
         created_at: existing.created_at,
         updated_at: String::new(), // will be set by db::tasks::update
     };

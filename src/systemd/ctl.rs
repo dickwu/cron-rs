@@ -34,18 +34,24 @@ impl Systemctl {
 
         // Ensure the unit directory exists.
         std::fs::create_dir_all(&unit_dir).with_context(|| {
-            format!("failed to create systemd user unit directory: {}", unit_dir.display())
+            format!(
+                "failed to create systemd user unit directory: {}",
+                unit_dir.display()
+            )
         })?;
 
         // Resolve the current binary path.
-        let binary_path = std::env::current_exe()
-            .context("failed to resolve current executable path")?;
+        let binary_path =
+            std::env::current_exe().context("failed to resolve current executable path")?;
 
         // Extract db_path as a string from config.
         let db_path = config.db_path.to_string_lossy().to_string();
 
         // Check that systemctl is available in PATH.
-        match std::process::Command::new("which").arg("systemctl").output() {
+        match std::process::Command::new("which")
+            .arg("systemctl")
+            .output()
+        {
             Ok(output) if output.status.success() => {
                 debug!("systemctl found in PATH");
             }
@@ -73,10 +79,7 @@ impl Systemctl {
 
         info!("running: systemctl --user {}", args.join(" "));
 
-        let output = cmd
-            .output()
-            .await
-            .context("failed to execute systemctl")?;
+        let output = cmd.output().await.context("failed to execute systemctl")?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -111,10 +114,7 @@ impl Systemctl {
 
         info!("running: systemctl --user {}", args.join(" "));
 
-        let output = cmd
-            .output()
-            .await
-            .context("failed to execute systemctl")?;
+        let output = cmd.output().await.context("failed to execute systemctl")?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -133,11 +133,14 @@ impl Systemctl {
 #[async_trait::async_trait]
 impl SystemdManager for Systemctl {
     async fn install_task(&self, task: &Task) -> Result<()> {
+        if task.lock_key.is_some() || task.sandbox_profile.is_some() {
+            unit_gen::ensure_lock_dir().context("failed to prepare cron-rs lock directory")?;
+        }
+
         // Generate unit file contents.
         let timer_content = unit_gen::generate_timer(&task.name, &task.schedule);
-        let service_content = unit_gen::generate_service(
-            &task.name,
-            &task.id,
+        let service_content = unit_gen::generate_service_for_task(
+            task,
             &self.binary_path.to_string_lossy(),
             &self.db_path,
         );
@@ -148,12 +151,19 @@ impl SystemdManager for Systemctl {
 
         tokio::fs::write(&timer_path, &timer_content)
             .await
-            .with_context(|| format!("failed to write timer unit file: {}", timer_path.display()))?;
+            .with_context(|| {
+                format!("failed to write timer unit file: {}", timer_path.display())
+            })?;
         info!("wrote timer unit: {}", timer_path.display());
 
         tokio::fs::write(&service_path, &service_content)
             .await
-            .with_context(|| format!("failed to write service unit file: {}", service_path.display()))?;
+            .with_context(|| {
+                format!(
+                    "failed to write service unit file: {}",
+                    service_path.display()
+                )
+            })?;
         info!("wrote service unit: {}", service_path.display());
 
         // Reload daemon to pick up new files, then enable and start the timer.
@@ -175,16 +185,18 @@ impl SystemdManager for Systemctl {
         let service_path = self.unit_dir.join(unit_gen::service_filename(task_name));
 
         if timer_path.exists() {
-            tokio::fs::remove_file(&timer_path)
-                .await
-                .with_context(|| format!("failed to remove timer unit: {}", timer_path.display()))?;
+            tokio::fs::remove_file(&timer_path).await.with_context(|| {
+                format!("failed to remove timer unit: {}", timer_path.display())
+            })?;
             info!("removed timer unit: {}", timer_path.display());
         }
 
         if service_path.exists() {
             tokio::fs::remove_file(&service_path)
                 .await
-                .with_context(|| format!("failed to remove service unit: {}", service_path.display()))?;
+                .with_context(|| {
+                    format!("failed to remove service unit: {}", service_path.display())
+                })?;
             info!("removed service unit: {}", service_path.display());
         }
 

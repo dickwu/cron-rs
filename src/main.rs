@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use clap::Parser;
 use cli::{Cli, Commands};
-use tracing::info;
+use tracing::{info, warn};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -41,6 +41,10 @@ async fn main() -> anyhow::Result<()> {
             // Create database and run migrations
             let database = db::Database::new(&config.db_path).await?;
             database.run_migrations().await?;
+
+            if let Err(err) = systemd::unit_gen::ensure_lock_dir() {
+                warn!("Failed to prepare cron-rs lock directory: {}", err);
+            }
 
             // Mark orphaned runs as crashed on startup
             let conn = database.connect().await?;
@@ -129,8 +133,8 @@ async fn main() -> anyhow::Result<()> {
         Commands::Doctor => {
             cli::doctor::run_doctor().await?;
         }
-        Commands::Regenerate => {
-            cli::doctor::run_regenerate().await?;
+        Commands::Regenerate { rewrite_all } => {
+            cli::doctor::run_regenerate(rewrite_all).await?;
         }
         Commands::Run {
             task_id,

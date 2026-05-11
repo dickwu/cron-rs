@@ -15,6 +15,8 @@ fn make_test_task(name: &str, schedule: &str) -> Task {
         retry_delay_secs: 5,
         timeout_secs: None,
         concurrency_policy: ConcurrencyPolicy::Skip,
+        lock_key: None,
+        sandbox_profile: None,
         created_at: "2024-01-01 00:00:00".to_string(),
         updated_at: "2024-01-01 00:00:00".to_string(),
     }

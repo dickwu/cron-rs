@@ -45,6 +45,8 @@ pub struct Task {
     pub retry_delay_secs: i32,
     pub timeout_secs: Option<i32>,
     pub concurrency_policy: ConcurrencyPolicy,
+    pub lock_key: Option<String>,
+    pub sandbox_profile: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }

@@ -45,6 +45,8 @@ fn make_test_task(name: &str, command: &str) -> Task {
         retry_delay_secs: 5,
         timeout_secs: None,
         concurrency_policy: ConcurrencyPolicy::Skip,
+        lock_key: None,
+        sandbox_profile: None,
         created_at: String::new(),
         updated_at: String::new(),
     }
@@ -300,10 +302,14 @@ async fn task_crud_update() {
     let mut updated = created.clone();
     updated.command = "echo new".to_string();
     updated.max_retries = 3;
+    updated.lock_key = Some("staff-api-boot".to_string());
+    updated.sandbox_profile = Some("staff-api-hyperf".to_string());
 
     let saved = db::tasks::update(&conn, &updated).await.unwrap();
     assert_eq!(saved.command, "echo new");
     assert_eq!(saved.max_retries, 3);
+    assert_eq!(saved.lock_key.as_deref(), Some("staff-api-boot"));
+    assert_eq!(saved.sandbox_profile.as_deref(), Some("staff-api-hyperf"));
     assert_eq!(saved.id, created.id);
 
     cleanup_db(&path);
