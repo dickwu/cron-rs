@@ -5,6 +5,7 @@ mod db;
 mod event_bus;
 mod event_poller;
 mod models;
+mod pruner;
 mod runner;
 mod systemd;
 
@@ -58,6 +59,7 @@ async fn main() -> anyhow::Result<()> {
             let event_bus = event_bus::new(256);
             let db_arc = Arc::new(database);
             event_poller::spawn(db_arc.clone(), event_bus.clone());
+            pruner::spawn(db_arc.clone());
 
             // Create app state
             let state = api::AppState {

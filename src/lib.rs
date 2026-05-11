@@ -5,5 +5,6 @@ pub mod db;
 pub mod event_bus;
 pub mod event_poller;
 pub mod models;
+pub mod pruner;
 pub mod runner;
 pub mod systemd;

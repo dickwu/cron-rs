@@ -3,6 +3,7 @@ pub mod events;
 pub mod hooks;
 pub mod middleware;
 pub mod runs;
+pub mod settings;
 pub mod static_files;
 pub mod tasks;
 
@@ -67,6 +68,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/runs/{id}", get(runs::get_run))
         .route("/api/v1/runs/{id}/hooks", get(runs::list_hook_runs))
         .route("/api/v1/tasks/{id}/runs", get(runs::list_task_runs))
+        // Settings
+        .route("/api/v1/settings", get(settings::get_settings))
+        .route("/api/v1/settings", put(settings::update_settings))
         // Status
         .route("/api/v1/status", get(status))
         .route("/api/v1/events", get(events::events))

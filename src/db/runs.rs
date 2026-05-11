@@ -192,6 +192,34 @@ pub async fn get_running_runs_for_task(
     Ok(runs)
 }
 
+/// Delete job_runs (and their hook_runs) older than `days` days based on `started_at`.
+/// Returns the number of job_runs deleted. A `days` value of 0 is treated as
+/// "no retention" and deletes nothing.
+pub async fn prune_runs_older_than(conn: &Connection, days: u32) -> Result<u64, DbError> {
+    if days == 0 {
+        return Ok(0);
+    }
+    let modifier = format!("-{days} days");
+
+    conn.execute(
+        "DELETE FROM hook_runs
+         WHERE job_run_id IN (
+             SELECT id FROM job_runs WHERE started_at < datetime('now', ?1)
+         )",
+        [modifier.clone()],
+    )
+    .await?;
+
+    let deleted = conn
+        .execute(
+            "DELETE FROM job_runs WHERE started_at < datetime('now', ?1)",
+            [modifier],
+        )
+        .await?;
+
+    Ok(deleted)
+}
+
 /// Mark all orphaned runs (status 'running' or 'retrying') as 'crashed'.
 /// Returns the number of rows updated.
 pub async fn mark_orphaned_runs_crashed(conn: &Connection) -> Result<u64, DbError> {
