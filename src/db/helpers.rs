@@ -138,3 +138,45 @@ pub fn new_uuid() -> String {
 pub fn now_timestamp() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
+
+/// Parse a stored `started_at` / `finished_at` value as a UTC instant.
+///
+/// Accepts both the current RFC 3339 form (`2026-05-12T03:51:13Z`) and the
+/// legacy naïve form (`2026-05-12 03:51:13`) written by older binaries before
+/// the Z-suffix change. Both encode UTC; the legacy form just lacks an
+/// explicit zone marker, so we attach UTC manually.
+pub fn parse_run_ts(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+        return Some(dt.with_timezone(&chrono::Utc));
+    }
+    chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S")
+        .ok()
+        .map(|nd| chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(nd, chrono::Utc))
+}
+
+/// Parse a "since" query string like `24h`, `7d`, `30m`, `2w` into a Duration.
+///
+/// Bare integers are treated as seconds. Returns `None` for empty / malformed
+/// input so the caller can decide whether to error or fall through to no-filter.
+pub fn parse_since(s: &str) -> Option<chrono::Duration> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let (num_part, unit) = match s.chars().last() {
+        Some(c) if c.is_ascii_alphabetic() => (&s[..s.len() - 1], Some(c.to_ascii_lowercase())),
+        _ => (s, None),
+    };
+    let n: i64 = num_part.parse().ok()?;
+    if n < 0 {
+        return None;
+    }
+    match unit {
+        None | Some('s') => Some(chrono::Duration::seconds(n)),
+        Some('m') => Some(chrono::Duration::minutes(n)),
+        Some('h') => Some(chrono::Duration::hours(n)),
+        Some('d') => Some(chrono::Duration::days(n)),
+        Some('w') => Some(chrono::Duration::weeks(n)),
+        _ => None,
+    }
+}

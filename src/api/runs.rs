@@ -8,7 +8,7 @@ use tracing::error;
 
 use super::AppState;
 use crate::db;
-use crate::db::helpers::DbError;
+use crate::db::helpers::{parse_run_ts, parse_since, DbError};
 use crate::models::{HookRun, JobRun, JobRunStatus};
 
 // --- Request/Response types ---
@@ -19,6 +19,38 @@ pub struct ListRunsQuery {
     pub status: Option<String>,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
+    /// Optional time-window filter like `24h`, `7d`, `30d`. Drops rows whose
+    /// `started_at` is older than `now - since`.
+    pub since: Option<String>,
+}
+
+/// Cap for the underlying SQL `LIMIT` when a `since` filter is active. Lets us
+/// fetch enough recent rows to reach the cutoff on busy installs while still
+/// bounding worst-case response size.
+const SINCE_FETCH_CAP: i64 = 50_000;
+
+/// Apply the optional `since` cutoff in Rust. Necessary because legacy and new
+/// timestamp formats don't sort correctly with raw lex comparison in SQL.
+fn apply_since(runs: Vec<JobRun>, since: Option<&str>) -> Vec<JobRun> {
+    let Some(spec) = since else { return runs };
+    let Some(duration) = parse_since(spec) else { return runs };
+    let cutoff = chrono::Utc::now() - duration;
+    runs.into_iter()
+        .filter(|r| match parse_run_ts(&r.started_at) {
+            Some(ts) => ts >= cutoff,
+            None => false,
+        })
+        .collect()
+}
+
+/// Choose an effective SQL `LIMIT`: when a `since` filter is in play, fetch up
+/// to `SINCE_FETCH_CAP` rows so the cutoff filter has enough data to work with.
+fn effective_limit(query_limit: Option<i64>, since: Option<&str>) -> Option<i64> {
+    if since.is_some() {
+        Some(query_limit.unwrap_or(SINCE_FETCH_CAP).min(SINCE_FETCH_CAP))
+    } else {
+        query_limit
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -100,17 +132,21 @@ pub async fn list_runs(
         }
     };
 
+    let since = query.since.as_deref();
     match db::runs::list_job_runs(
         &conn,
         query.task_id.as_deref(),
         query.status.as_deref(),
-        query.limit,
+        effective_limit(query.limit, since),
         query.offset,
     )
     .await
     {
         Ok(runs) => {
-            let responses: Vec<RunResponse> = runs.into_iter().map(RunResponse::from).collect();
+            let responses: Vec<RunResponse> = apply_since(runs, since)
+                .into_iter()
+                .map(RunResponse::from)
+                .collect();
             (StatusCode::OK, Json(json!(responses))).into_response()
         }
         Err(e) => {
@@ -249,17 +285,21 @@ pub async fn list_task_runs(
         };
     }
 
+    let since = query.since.as_deref();
     match db::runs::list_job_runs(
         &conn,
         Some(&task_id),
         query.status.as_deref(),
-        query.limit,
+        effective_limit(query.limit, since),
         query.offset,
     )
     .await
     {
         Ok(runs) => {
-            let responses: Vec<RunResponse> = runs.into_iter().map(RunResponse::from).collect();
+            let responses: Vec<RunResponse> = apply_since(runs, since)
+                .into_iter()
+                .map(RunResponse::from)
+                .collect();
             (StatusCode::OK, Json(json!(responses))).into_response()
         }
         Err(e) => {

@@ -21,7 +21,9 @@ use tracing::error;
 
 use crate::config::Config;
 use crate::db;
+use crate::db::helpers::parse_run_ts;
 use crate::db::Database;
+use crate::models::JobRunStatus;
 use crate::systemd::SystemdManager;
 
 use self::middleware::JwtSecret;
@@ -128,23 +130,47 @@ async fn status(State(state): State<AppState>) -> impl IntoResponse {
         Err(_) => 0,
     };
 
-    // Count recent failures (last 24h)
-    let recent_failures =
-        match db::runs::list_job_runs(&conn, None, Some("failed"), Some(1000), Some(0)).await {
-            Ok(runs) => {
-                let cutoff = chrono::Utc::now() - chrono::Duration::hours(24);
-                let cutoff_str = cutoff.format("%Y-%m-%d %H:%M:%S").to_string();
-                runs.iter().filter(|r| r.started_at >= cutoff_str).count()
+    // Aggregate the last 24h in Rust so the cutoff comparison is correct across
+    // both RFC 3339 and legacy naïve timestamp formats (lex comparison breaks
+    // when one side has a `T` separator and the other has a space).
+    let cutoff = chrono::Utc::now() - chrono::Duration::hours(24);
+    let mut runs_24h: u64 = 0;
+    let mut success_24h: u64 = 0;
+    let mut failed_24h: u64 = 0;
+    if let Ok(runs) = db::runs::list_job_runs(&conn, None, None, Some(5000), Some(0)).await {
+        for r in &runs {
+            let Some(ts) = parse_run_ts(&r.started_at) else { continue };
+            if ts < cutoff {
+                continue;
             }
-            Err(_) => 0,
-        };
+            runs_24h += 1;
+            match r.status {
+                JobRunStatus::Success => success_24h += 1,
+                JobRunStatus::Failed | JobRunStatus::Timeout | JobRunStatus::Crashed => {
+                    failed_24h += 1
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let finished_24h = success_24h + failed_24h;
+    let success_rate = if finished_24h > 0 {
+        (success_24h as f64 / finished_24h as f64) * 100.0
+    } else {
+        // No finished runs in the window — nothing to grade. Show 100% rather
+        // than 0% so a quiet installation doesn't look like it's on fire.
+        100.0
+    };
 
     (
         StatusCode::OK,
         Json(json!({
             "task_count": task_count,
             "active_timers": active_timers,
-            "recent_failures_24h": recent_failures
+            "runs_24h": runs_24h,
+            "success_rate": success_rate,
+            "recent_failures_24h": failed_24h,
         })),
     )
         .into_response()
