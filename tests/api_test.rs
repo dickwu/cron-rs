@@ -420,6 +420,8 @@ async fn t23_crud_tasks() {
     let tasks: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(tasks.len(), 1);
     assert_eq!(tasks[0]["name"].as_str().unwrap(), "test-task");
+    assert!(tasks[0].get("command").is_none());
+    assert!(tasks[0].get("description").is_none());
 
     // --- GET ---
     let response = app
@@ -439,6 +441,27 @@ async fn t23_crud_tasks() {
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     let fetched: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(fetched["id"].as_str().unwrap(), &task_id);
+
+    // --- DETAIL ---
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(http::Method::GET)
+                .uri(format!("/api/v1/tasks/{}/detail", task_id))
+                .header(http::header::AUTHORIZATION, auth_header(&token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let detail: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(detail["task"]["id"].as_str().unwrap(), &task_id);
+    assert!(detail["hooks"].as_array().unwrap().is_empty());
+    assert!(detail["runs"].as_array().unwrap().is_empty());
 
     // --- UPDATE ---
     let update_body = serde_json::json!({
@@ -886,8 +909,8 @@ async fn t29_runs_list_with_filters() {
             started_at: String::new(),
             finished_at: Some("2024-01-01 12:00:00".to_string()),
             exit_code: Some(0),
-            stdout: String::new(),
-            stderr: String::new(),
+            stdout: "large stdout payload".to_string(),
+            stderr: "large stderr payload".to_string(),
             status,
             attempt: 1,
             duration_ms: Some(100),
@@ -913,6 +936,35 @@ async fn t29_runs_list_with_filters() {
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     let runs: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(runs.len(), 2);
+    assert!(runs[0].get("stdout").is_none());
+    assert!(runs[0].get("stderr").is_none());
+
+    // Full output is available only when explicitly requested on list routes.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(http::Method::GET)
+                .uri("/api/v1/runs?include_output=true")
+                .header(http::header::AUTHORIZATION, auth_header(&token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let runs_with_output: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(runs_with_output.len(), 2);
+    assert_eq!(
+        runs_with_output[0]["stdout"].as_str().unwrap(),
+        "large stdout payload"
+    );
+    assert_eq!(
+        runs_with_output[0]["stderr"].as_str().unwrap(),
+        "large stderr payload"
+    );
 
     // Filter by task_id
     let response = app
@@ -971,6 +1023,8 @@ async fn t29_runs_list_with_filters() {
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     let runs: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(runs.len(), 2);
+    assert!(runs[0].get("stdout").is_none());
+    assert!(runs[0].get("stderr").is_none());
 
     cleanup_db(&path);
 }

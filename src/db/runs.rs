@@ -79,70 +79,32 @@ pub async fn get_job_run_by_id(conn: &Connection, id: &str) -> Result<JobRun, Db
 }
 
 /// List job runs with optional filters.
-/// filter by task_id (if Some), status (if Some), with limit and offset.
+/// Filters: task_id, status, started_after (RFC 3339, inclusive). `limit` and
+/// `offset` are still honoured for pagination — but when `started_after` is set
+/// the SQL `WHERE started_at >= ?` (using `idx_job_runs_started_at`) is the real
+/// gate, so callers can pass a generous limit instead of paging by row count.
 pub async fn list_job_runs(
     conn: &Connection,
     task_id: Option<&str>,
     status: Option<&str>,
+    started_after: Option<&str>,
     limit: Option<i64>,
     offset: Option<i64>,
 ) -> Result<Vec<JobRun>, DbError> {
-    let limit_val = limit.unwrap_or(100);
-    let offset_val = offset.unwrap_or(0);
+    let (sql, params) = build_runs_query(
+        "id, task_id, started_at, finished_at, exit_code, stdout, stderr, status, attempt, duration_ms",
+        task_id,
+        status,
+        started_after,
+        limit,
+        offset,
+    );
 
+    let mut rows = conn.query(&sql, params).await?;
     let mut runs = Vec::new();
-
-    match (task_id, status) {
-        (Some(tid), Some(st)) => {
-            let mut rows = conn
-                .query(
-                    "SELECT id, task_id, started_at, finished_at, exit_code, stdout, stderr, status, attempt, duration_ms
-                     FROM job_runs WHERE task_id = ?1 AND status = ?2 ORDER BY started_at DESC LIMIT ?3 OFFSET ?4",
-                    libsql::params![tid.to_string(), st.to_string(), limit_val, offset_val],
-                )
-                .await?;
-            while let Some(row) = rows.next().await? {
-                runs.push(JobRun::from_row(&row)?);
-            }
-        }
-        (Some(tid), None) => {
-            let mut rows = conn
-                .query(
-                    "SELECT id, task_id, started_at, finished_at, exit_code, stdout, stderr, status, attempt, duration_ms
-                     FROM job_runs WHERE task_id = ?1 ORDER BY started_at DESC LIMIT ?2 OFFSET ?3",
-                    libsql::params![tid.to_string(), limit_val, offset_val],
-                )
-                .await?;
-            while let Some(row) = rows.next().await? {
-                runs.push(JobRun::from_row(&row)?);
-            }
-        }
-        (None, Some(st)) => {
-            let mut rows = conn
-                .query(
-                    "SELECT id, task_id, started_at, finished_at, exit_code, stdout, stderr, status, attempt, duration_ms
-                     FROM job_runs WHERE status = ?1 ORDER BY started_at DESC LIMIT ?2 OFFSET ?3",
-                    libsql::params![st.to_string(), limit_val, offset_val],
-                )
-                .await?;
-            while let Some(row) = rows.next().await? {
-                runs.push(JobRun::from_row(&row)?);
-            }
-        }
-        (None, None) => {
-            let mut rows = conn
-                .query(
-                    "SELECT id, task_id, started_at, finished_at, exit_code, stdout, stderr, status, attempt, duration_ms
-                     FROM job_runs ORDER BY started_at DESC LIMIT ?1 OFFSET ?2",
-                    libsql::params![limit_val, offset_val],
-                )
-                .await?;
-            while let Some(row) = rows.next().await? {
-                runs.push(JobRun::from_row(&row)?);
-            }
-        }
+    while let Some(row) = rows.next().await? {
+        runs.push(JobRun::from_row(&row)?);
     }
-
     Ok(runs)
 }
 
@@ -151,66 +113,59 @@ pub async fn list_job_run_summaries(
     conn: &Connection,
     task_id: Option<&str>,
     status: Option<&str>,
+    started_after: Option<&str>,
     limit: Option<i64>,
     offset: Option<i64>,
 ) -> Result<Vec<JobRunSummary>, DbError> {
-    let limit_val = limit.unwrap_or(100);
-    let offset_val = offset.unwrap_or(0);
+    let (sql, params) = build_runs_query(
+        "id, task_id, started_at, finished_at, exit_code, status, attempt, duration_ms",
+        task_id,
+        status,
+        started_after,
+        limit,
+        offset,
+    );
 
+    let mut rows = conn.query(&sql, params).await?;
     let mut runs = Vec::new();
-
-    match (task_id, status) {
-        (Some(tid), Some(st)) => {
-            let mut rows = conn
-                .query(
-                    "SELECT id, task_id, started_at, finished_at, exit_code, status, attempt, duration_ms
-                     FROM job_runs WHERE task_id = ?1 AND status = ?2 ORDER BY started_at DESC LIMIT ?3 OFFSET ?4",
-                    libsql::params![tid.to_string(), st.to_string(), limit_val, offset_val],
-                )
-                .await?;
-            while let Some(row) = rows.next().await? {
-                runs.push(JobRunSummary::from_row(&row)?);
-            }
-        }
-        (Some(tid), None) => {
-            let mut rows = conn
-                .query(
-                    "SELECT id, task_id, started_at, finished_at, exit_code, status, attempt, duration_ms
-                     FROM job_runs WHERE task_id = ?1 ORDER BY started_at DESC LIMIT ?2 OFFSET ?3",
-                    libsql::params![tid.to_string(), limit_val, offset_val],
-                )
-                .await?;
-            while let Some(row) = rows.next().await? {
-                runs.push(JobRunSummary::from_row(&row)?);
-            }
-        }
-        (None, Some(st)) => {
-            let mut rows = conn
-                .query(
-                    "SELECT id, task_id, started_at, finished_at, exit_code, status, attempt, duration_ms
-                     FROM job_runs WHERE status = ?1 ORDER BY started_at DESC LIMIT ?2 OFFSET ?3",
-                    libsql::params![st.to_string(), limit_val, offset_val],
-                )
-                .await?;
-            while let Some(row) = rows.next().await? {
-                runs.push(JobRunSummary::from_row(&row)?);
-            }
-        }
-        (None, None) => {
-            let mut rows = conn
-                .query(
-                    "SELECT id, task_id, started_at, finished_at, exit_code, status, attempt, duration_ms
-                     FROM job_runs ORDER BY started_at DESC LIMIT ?1 OFFSET ?2",
-                    libsql::params![limit_val, offset_val],
-                )
-                .await?;
-            while let Some(row) = rows.next().await? {
-                runs.push(JobRunSummary::from_row(&row)?);
-            }
-        }
+    while let Some(row) = rows.next().await? {
+        runs.push(JobRunSummary::from_row(&row)?);
     }
-
     Ok(runs)
+}
+
+fn build_runs_query(
+    columns: &str,
+    task_id: Option<&str>,
+    status: Option<&str>,
+    started_after: Option<&str>,
+    limit: Option<i64>,
+    offset: Option<i64>,
+) -> (String, Vec<libsql::Value>) {
+    let mut sql = format!("SELECT {columns} FROM job_runs WHERE 1=1");
+    let mut params: Vec<libsql::Value> = Vec::new();
+    if let Some(tid) = task_id {
+        sql.push_str(" AND task_id = ?");
+        params.push(libsql::Value::Text(tid.to_string()));
+    }
+    if let Some(st) = status {
+        sql.push_str(" AND status = ?");
+        params.push(libsql::Value::Text(st.to_string()));
+    }
+    if let Some(after) = started_after {
+        sql.push_str(" AND started_at >= ?");
+        params.push(libsql::Value::Text(after.to_string()));
+    }
+    sql.push_str(" ORDER BY started_at DESC LIMIT ? OFFSET ?");
+    // When the date filter does the heavy lifting, the default cap is large
+    // enough to cover any realistic 30-day window without paging.
+    params.push(libsql::Value::Integer(limit.unwrap_or(if started_after.is_some() {
+        50_000
+    } else {
+        100
+    })));
+    params.push(libsql::Value::Integer(offset.unwrap_or(0)));
+    (sql, params)
 }
 
 /// Update an existing job run (status, exit_code, stdout, stderr, finished_at, duration_ms).

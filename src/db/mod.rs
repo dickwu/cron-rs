@@ -35,6 +35,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "006_task_sandbox_profile",
         include_str!("../../migrations/006_task_sandbox_profile.sql"),
     ),
+    (
+        "007_normalize_started_at",
+        include_str!("../../migrations/007_normalize_started_at.sql"),
+    ),
 ];
 
 struct DatabaseInner {

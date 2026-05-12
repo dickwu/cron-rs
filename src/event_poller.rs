@@ -20,7 +20,7 @@ async fn run(db: Arc<Database>, bus: EventBus) {
     let mut seen_tasks: HashMap<String, String> = HashMap::new();
 
     if let Ok(conn) = db.connect().await {
-        if let Ok(runs) = db::runs::list_job_runs(&conn, None, None, Some(500), None).await {
+        if let Ok(runs) = db::runs::list_job_runs(&conn, None, None, None, Some(500), None).await {
             for run in runs {
                 seen_runs.insert(run.id, run.status.to_string());
             }
@@ -45,7 +45,7 @@ async fn run(db: Arc<Database>, bus: EventBus) {
             }
         };
 
-        if let Ok(runs) = db::runs::list_job_runs(&conn, None, None, Some(500), None).await {
+        if let Ok(runs) = db::runs::list_job_runs(&conn, None, None, None, Some(500), None).await {
             for run in runs {
                 let status = run.status.to_string();
                 let key = run.id.clone();

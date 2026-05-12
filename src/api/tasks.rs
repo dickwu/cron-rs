@@ -8,7 +8,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::json;
 use tracing::{error, info};
 
-use super::AppState;
+use super::{hooks::HookResponse, runs::RunSummaryResponse, AppState};
 use crate::db;
 use crate::db::helpers::DbError;
 use crate::models::task::ConcurrencyPolicy;
@@ -111,6 +111,38 @@ impl From<Task> for TaskResponse {
     }
 }
 
+#[derive(Debug, Serialize)]
+pub struct TaskSummaryResponse {
+    pub id: String,
+    pub name: String,
+    pub schedule: String,
+    pub tags: Vec<String>,
+    pub enabled: bool,
+    pub updated_at: String,
+}
+
+impl From<Task> for TaskSummaryResponse {
+    fn from(t: Task) -> Self {
+        TaskSummaryResponse {
+            id: t.id,
+            name: t.name,
+            schedule: t.schedule,
+            tags: t.tags,
+            enabled: t.enabled,
+            updated_at: t.updated_at,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct TaskDetailResponse {
+    pub task: TaskResponse,
+    pub hooks: Vec<HookResponse>,
+    pub runs: Vec<RunSummaryResponse>,
+}
+
+const TASK_DETAIL_RUN_LIMIT: i64 = 50;
+
 // --- Helpers ---
 
 fn db_error_to_response(err: DbError) -> (StatusCode, Json<serde_json::Value>) {
@@ -198,7 +230,8 @@ pub async fn list_tasks(State(state): State<AppState>) -> impl IntoResponse {
 
     match db::tasks::list(&conn).await {
         Ok(tasks) => {
-            let responses: Vec<TaskResponse> = tasks.into_iter().map(TaskResponse::from).collect();
+            let responses: Vec<TaskSummaryResponse> =
+                tasks.into_iter().map(TaskSummaryResponse::from).collect();
             (StatusCode::OK, Json(json!(responses))).into_response()
         }
         Err(e) => {
@@ -286,6 +319,75 @@ pub async fn create_task(
     (
         StatusCode::CREATED,
         Json(json!(TaskResponse::from(created))),
+    )
+        .into_response()
+}
+
+/// GET /api/v1/tasks/:id/detail
+pub async fn get_task_detail(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let conn = match state.db.connect().await {
+        Ok(c) => c,
+        Err(e) => {
+            error!("Database connection error: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Internal server error"})),
+            )
+                .into_response();
+        }
+    };
+
+    let task = match db::tasks::get_by_id(&conn, &id).await {
+        Ok(task) => task,
+        Err(e) => {
+            let (status, body) = db_error_to_response(e);
+            return (status, body).into_response();
+        }
+    };
+
+    let hooks = match db::hooks::list_for_task(&conn, &id).await {
+        Ok(hooks) => hooks.into_iter().map(HookResponse::from).collect(),
+        Err(e) => {
+            error!("Failed to list task hooks: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Internal server error"})),
+            )
+                .into_response();
+        }
+    };
+
+    let runs = match db::runs::list_job_run_summaries(
+        &conn,
+        Some(&id),
+        None,
+        None,
+        Some(TASK_DETAIL_RUN_LIMIT),
+        Some(0),
+    )
+    .await
+    {
+        Ok(runs) => runs.into_iter().map(RunSummaryResponse::from).collect(),
+        Err(e) => {
+            error!("Failed to list task runs: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Internal server error"})),
+            )
+                .into_response();
+        }
+    };
+
+    (
+        StatusCode::OK,
+        Json(json!(TaskDetailResponse {
+            task: TaskResponse::from(task),
+            hooks,
+            runs,
+        })),
     )
         .into_response()
 }

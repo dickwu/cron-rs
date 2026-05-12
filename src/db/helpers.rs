@@ -202,3 +202,28 @@ pub fn parse_since(s: &str) -> Option<chrono::Duration> {
         _ => None,
     }
 }
+
+/// Resolve a user-supplied `since` value to an RFC 3339 UTC cutoff string ready
+/// to drop into SQL. Accepts:
+///   * Relative durations: `24h`, `7d`, `30m`, `2w`, or bare seconds
+///   * Absolute timestamps in RFC 3339 form (with `Z` or `±HH:MM` offset)
+///
+/// Returns `None` when the input is empty or unparseable so the caller can
+/// fall through to "no filter" rather than 400-ing the request.
+pub fn since_cutoff(s: &str) -> Option<String> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    if let Some(d) = parse_since(s) {
+        let cutoff = chrono::Utc::now() - d;
+        return Some(cutoff.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+    }
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+        return Some(
+            dt.with_timezone(&chrono::Utc)
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        );
+    }
+    None
+}

@@ -298,7 +298,7 @@ async fn load_summary(state: &AppState) -> anyhow::Result<DashboardSummary> {
 
     let cutoff = Utc::now() - chrono::Duration::hours(24);
     let runs =
-        db::runs::list_job_run_summaries(&conn, None, None, Some(SUMMARY_FETCH_LIMIT), Some(0))
+        db::runs::list_job_run_summaries(&conn, None, None, None, Some(SUMMARY_FETCH_LIMIT), Some(0))
             .await
             .context("list run summaries")?;
 
@@ -344,7 +344,7 @@ async fn load_recent_runs(
 ) -> anyhow::Result<Vec<DashboardRunSummary>> {
     let conn = state.db.connect().await.context("connect database")?;
     let task_names = task_names(&conn).await?;
-    let runs = db::runs::list_job_run_summaries(&conn, None, None, Some(limit), Some(0))
+    let runs = db::runs::list_job_run_summaries(&conn, None, None, None, Some(limit), Some(0))
         .await
         .context("list recent run summaries")?;
 
@@ -363,7 +363,7 @@ async fn load_activity(
     let duration = parse_since(range.since()).context("parse dashboard range")?;
     let cutoff = Utc::now() - duration;
     let runs =
-        db::runs::list_job_run_summaries(&conn, None, None, Some(ACTIVITY_FETCH_LIMIT), Some(0))
+        db::runs::list_job_run_summaries(&conn, None, None, None, Some(ACTIVITY_FETCH_LIMIT), Some(0))
             .await
             .context("list activity run summaries")?;
 

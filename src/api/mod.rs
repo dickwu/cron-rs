@@ -51,6 +51,7 @@ pub fn router(state: AppState) -> Router {
         // Tasks
         .route("/api/v1/tasks", get(tasks::list_tasks))
         .route("/api/v1/tasks", post(tasks::create_task))
+        .route("/api/v1/tasks/{id}/detail", get(tasks::get_task_detail))
         .route("/api/v1/tasks/{id}", get(tasks::get_task))
         .route("/api/v1/tasks/{id}", put(tasks::update_task))
         .route("/api/v1/tasks/{id}", delete(tasks::delete_task))

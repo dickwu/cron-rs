@@ -293,7 +293,7 @@ async fn runs_list(
             };
 
             let runs =
-                db::runs::list_job_runs(&conn, task_id_filter, status, Some(limit), Some(0))
+                db::runs::list_job_runs(&conn, task_id_filter, status, None, Some(limit), Some(0))
                     .await?;
             let json_runs: Vec<serde_json::Value> = runs
                 .iter()

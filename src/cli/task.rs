@@ -155,10 +155,10 @@ fn print_task_table(tasks: &[serde_json::Value]) {
     }
 
     println!(
-        "{:<36}  {:<20}  {:<8}  {:<25}  COMMAND",
+        "{:<36}  {:<20}  {:<8}  {:<25}  UPDATED",
         "ID", "NAME", "ENABLED", "SCHEDULE"
     );
-    println!("{}", "-".repeat(120));
+    println!("{}", "-".repeat(105));
 
     for task in tasks {
         let id = task.get("id").and_then(|v| v.as_str()).unwrap_or("-");
@@ -168,18 +168,16 @@ fn print_task_table(tasks: &[serde_json::Value]) {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
         let schedule = task.get("schedule").and_then(|v| v.as_str()).unwrap_or("-");
-        let command = task.get("command").and_then(|v| v.as_str()).unwrap_or("-");
+        let updated_at = task
+            .get("updated_at")
+            .and_then(|v| v.as_str())
+            .unwrap_or("-");
 
         let enabled_str = if enabled { "yes" } else { "no" };
-        let command_display = if command.len() > 40 {
-            format!("{}...", &command[..37])
-        } else {
-            command.to_string()
-        };
 
         println!(
             "{:<36}  {:<20}  {:<8}  {:<25}  {}",
-            id, name, enabled_str, schedule, command_display
+            id, name, enabled_str, schedule, updated_at
         );
     }
 }
@@ -823,7 +821,7 @@ pub async fn show_status(config: &Config) -> anyhow::Result<()> {
             let enabled_count = tasks.iter().filter(|t| t.enabled).count();
 
             let failures =
-                db::runs::list_job_runs(&conn, None, Some("failed"), Some(1000), Some(0))
+                db::runs::list_job_runs(&conn, None, Some("failed"), None, Some(1000), Some(0))
                     .await
                     .unwrap_or_default();
             let cutoff = chrono::Utc::now() - chrono::Duration::hours(24);
