@@ -58,6 +58,18 @@ pub struct JobRun {
     pub duration_ms: Option<i64>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JobRunSummary {
+    pub id: String,
+    pub task_id: String,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+    pub exit_code: Option<i32>,
+    pub status: JobRunStatus,
+    pub attempt: i32,
+    pub duration_ms: Option<i64>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum HookRunStatus {

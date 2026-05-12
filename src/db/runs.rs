@@ -1,5 +1,5 @@
 use crate::db::helpers::{new_uuid, now_timestamp, DbError, FromRow};
-use crate::models::{HookRun, JobRun};
+use crate::models::{HookRun, JobRun, JobRunSummary};
 use libsql::Connection;
 
 /// Convert an Option<i32> to a libsql::Value (Integer or Null).
@@ -29,9 +29,17 @@ fn opt_string_to_value(v: &Option<String>) -> libsql::Value {
 /// Insert a new job run.
 /// Generates an id and started_at if they are empty.
 pub async fn create_job_run(conn: &Connection, run: &JobRun) -> Result<JobRun, DbError> {
-    let id = if run.id.is_empty() { new_uuid() } else { run.id.clone() };
+    let id = if run.id.is_empty() {
+        new_uuid()
+    } else {
+        run.id.clone()
+    };
     let now = now_timestamp();
-    let started_at = if run.started_at.is_empty() { now } else { run.started_at.clone() };
+    let started_at = if run.started_at.is_empty() {
+        now
+    } else {
+        run.started_at.clone()
+    };
 
     conn.execute(
         "INSERT INTO job_runs (id, task_id, started_at, finished_at, exit_code, stdout, stderr, status, attempt, duration_ms)
@@ -138,6 +146,73 @@ pub async fn list_job_runs(
     Ok(runs)
 }
 
+/// List job runs without stdout/stderr payloads.
+pub async fn list_job_run_summaries(
+    conn: &Connection,
+    task_id: Option<&str>,
+    status: Option<&str>,
+    limit: Option<i64>,
+    offset: Option<i64>,
+) -> Result<Vec<JobRunSummary>, DbError> {
+    let limit_val = limit.unwrap_or(100);
+    let offset_val = offset.unwrap_or(0);
+
+    let mut runs = Vec::new();
+
+    match (task_id, status) {
+        (Some(tid), Some(st)) => {
+            let mut rows = conn
+                .query(
+                    "SELECT id, task_id, started_at, finished_at, exit_code, status, attempt, duration_ms
+                     FROM job_runs WHERE task_id = ?1 AND status = ?2 ORDER BY started_at DESC LIMIT ?3 OFFSET ?4",
+                    libsql::params![tid.to_string(), st.to_string(), limit_val, offset_val],
+                )
+                .await?;
+            while let Some(row) = rows.next().await? {
+                runs.push(JobRunSummary::from_row(&row)?);
+            }
+        }
+        (Some(tid), None) => {
+            let mut rows = conn
+                .query(
+                    "SELECT id, task_id, started_at, finished_at, exit_code, status, attempt, duration_ms
+                     FROM job_runs WHERE task_id = ?1 ORDER BY started_at DESC LIMIT ?2 OFFSET ?3",
+                    libsql::params![tid.to_string(), limit_val, offset_val],
+                )
+                .await?;
+            while let Some(row) = rows.next().await? {
+                runs.push(JobRunSummary::from_row(&row)?);
+            }
+        }
+        (None, Some(st)) => {
+            let mut rows = conn
+                .query(
+                    "SELECT id, task_id, started_at, finished_at, exit_code, status, attempt, duration_ms
+                     FROM job_runs WHERE status = ?1 ORDER BY started_at DESC LIMIT ?2 OFFSET ?3",
+                    libsql::params![st.to_string(), limit_val, offset_val],
+                )
+                .await?;
+            while let Some(row) = rows.next().await? {
+                runs.push(JobRunSummary::from_row(&row)?);
+            }
+        }
+        (None, None) => {
+            let mut rows = conn
+                .query(
+                    "SELECT id, task_id, started_at, finished_at, exit_code, status, attempt, duration_ms
+                     FROM job_runs ORDER BY started_at DESC LIMIT ?1 OFFSET ?2",
+                    libsql::params![limit_val, offset_val],
+                )
+                .await?;
+            while let Some(row) = rows.next().await? {
+                runs.push(JobRunSummary::from_row(&row)?);
+            }
+        }
+    }
+
+    Ok(runs)
+}
+
 /// Update an existing job run (status, exit_code, stdout, stderr, finished_at, duration_ms).
 pub async fn update_job_run(conn: &Connection, run: &JobRun) -> Result<(), DbError> {
     let rows_changed = conn
@@ -237,9 +312,17 @@ pub async fn mark_orphaned_runs_crashed(conn: &Connection) -> Result<u64, DbErro
 /// Insert a new hook run.
 /// Generates an id and started_at if they are empty.
 pub async fn create_hook_run(conn: &Connection, run: &HookRun) -> Result<HookRun, DbError> {
-    let id = if run.id.is_empty() { new_uuid() } else { run.id.clone() };
+    let id = if run.id.is_empty() {
+        new_uuid()
+    } else {
+        run.id.clone()
+    };
     let now = now_timestamp();
-    let started_at = if run.started_at.is_empty() { now } else { run.started_at.clone() };
+    let started_at = if run.started_at.is_empty() {
+        now
+    } else {
+        run.started_at.clone()
+    };
 
     conn.execute(
         "INSERT INTO hook_runs (id, job_run_id, hook_id, exit_code, stdout, stderr, started_at, finished_at, status)

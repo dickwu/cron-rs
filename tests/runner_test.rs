@@ -10,7 +10,9 @@ use cron_rs::runner::retry;
 /// Create a temp DB path with a unique name.
 fn temp_db_path() -> PathBuf {
     let id = uuid::Uuid::new_v4();
-    PathBuf::from(format!("/tmp/cron-rs-test-{}.db", id))
+    let dir = PathBuf::from(format!("/tmp/cron-rs-test-{id}"));
+    std::fs::create_dir_all(&dir).expect("Failed to create test directory");
+    dir.join("cron-rs.db")
 }
 
 /// Create and initialize a fresh test database, returning (Database, path_string).
@@ -30,6 +32,9 @@ fn cleanup_db(path: &PathBuf) {
     let _ = std::fs::remove_file(path);
     let _ = std::fs::remove_file(format!("{}-wal", path.display()));
     let _ = std::fs::remove_file(format!("{}-shm", path.display()));
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::remove_dir_all(parent);
+    }
 }
 
 fn make_test_task(name: &str, command: &str) -> Task {

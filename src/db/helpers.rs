@@ -1,7 +1,9 @@
 use thiserror::Error;
 
 use crate::models::task::ConcurrencyPolicy;
-use crate::models::{Hook, HookRun, HookRunStatus, HookType, JobRun, JobRunStatus, Task};
+use crate::models::{
+    Hook, HookRun, HookRunStatus, HookType, JobRun, JobRunStatus, JobRunSummary, Task,
+};
 
 #[derive(Debug, Error)]
 pub enum DbError {
@@ -98,6 +100,26 @@ impl FromRow for JobRun {
             status,
             attempt: row.get::<i32>(8)?,
             duration_ms: row.get::<Option<i64>>(9)?,
+        })
+    }
+}
+
+impl FromRow for JobRunSummary {
+    fn from_row(row: &libsql::Row) -> Result<Self, DbError> {
+        let status_str: String = row.get::<String>(5)?;
+        let status: JobRunStatus = status_str
+            .parse()
+            .map_err(|e: String| DbError::QueryError(e))?;
+
+        Ok(JobRunSummary {
+            id: row.get::<String>(0)?,
+            task_id: row.get::<String>(1)?,
+            started_at: row.get::<String>(2)?,
+            finished_at: row.get::<Option<String>>(3)?,
+            exit_code: row.get::<Option<i32>>(4)?,
+            status,
+            attempt: row.get::<i32>(6)?,
+            duration_ms: row.get::<Option<i64>>(7)?,
         })
     }
 }

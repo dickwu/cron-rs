@@ -71,6 +71,9 @@ async fn main() -> anyhow::Result<()> {
                 systemd: Arc::new(systemd),
                 config: Arc::new(config.clone()),
                 event_bus,
+                dashboard_cache: Arc::new(tokio::sync::RwLock::new(
+                    api::dashboard::DashboardCache::default(),
+                )),
             };
 
             // Build router

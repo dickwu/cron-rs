@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use axum::body::Body;
@@ -122,14 +122,14 @@ fn hash_test_password() -> String {
         .to_string()
 }
 
-fn test_config(db_path: &PathBuf) -> Config {
+fn test_config(db_path: &Path) -> Config {
     Config {
         username: "admin".to_string(),
         password_hash: hash_test_password(),
         jwt_secret: "test-secret-key-for-jwt-signing-minimum-length".to_string(),
         host: "127.0.0.1".to_string(),
         port: 9746,
-        db_path: db_path.clone(),
+        db_path: db_path.to_path_buf(),
         token_expiry: "24h".to_string(),
         config_dir: PathBuf::from("/tmp"),
         timezone: String::new(),
@@ -149,6 +149,9 @@ async fn setup_app() -> (axum::Router, PathBuf, MockSystemdManager) {
         systemd: Arc::new(mock_systemd.clone()),
         config: Arc::new(config),
         event_bus: cron_rs::event_bus::new(16),
+        dashboard_cache: Arc::new(tokio::sync::RwLock::new(
+            api::dashboard::DashboardCache::default(),
+        )),
     };
 
     let app = api::router(state);

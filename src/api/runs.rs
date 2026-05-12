@@ -9,7 +9,7 @@ use tracing::error;
 use super::AppState;
 use crate::db;
 use crate::db::helpers::{parse_run_ts, parse_since, DbError};
-use crate::models::{HookRun, JobRun, JobRunStatus};
+use crate::models::{HookRun, JobRun, JobRunStatus, JobRunSummary};
 
 // --- Request/Response types ---
 
@@ -19,6 +19,9 @@ pub struct ListRunsQuery {
     pub status: Option<String>,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
+    /// When false, list responses omit stdout/stderr and return summary rows.
+    /// Detail endpoints always include captured output.
+    pub include_output: Option<bool>,
     /// Optional time-window filter like `24h`, `7d`, `30d`. Drops rows whose
     /// `started_at` is older than `now - since`.
     pub since: Option<String>,
@@ -33,7 +36,23 @@ const SINCE_FETCH_CAP: i64 = 50_000;
 /// timestamp formats don't sort correctly with raw lex comparison in SQL.
 fn apply_since(runs: Vec<JobRun>, since: Option<&str>) -> Vec<JobRun> {
     let Some(spec) = since else { return runs };
-    let Some(duration) = parse_since(spec) else { return runs };
+    let Some(duration) = parse_since(spec) else {
+        return runs;
+    };
+    let cutoff = chrono::Utc::now() - duration;
+    runs.into_iter()
+        .filter(|r| match parse_run_ts(&r.started_at) {
+            Some(ts) => ts >= cutoff,
+            None => false,
+        })
+        .collect()
+}
+
+fn apply_since_summary(runs: Vec<JobRunSummary>, since: Option<&str>) -> Vec<JobRunSummary> {
+    let Some(spec) = since else { return runs };
+    let Some(duration) = parse_since(spec) else {
+        return runs;
+    };
     let cutoff = chrono::Utc::now() - duration;
     runs.into_iter()
         .filter(|r| match parse_run_ts(&r.started_at) {
@@ -77,6 +96,33 @@ impl From<JobRun> for RunResponse {
             exit_code: r.exit_code,
             stdout: r.stdout,
             stderr: r.stderr,
+            status: r.status,
+            attempt: r.attempt,
+            duration_ms: r.duration_ms,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct RunSummaryResponse {
+    pub id: String,
+    pub task_id: String,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+    pub exit_code: Option<i32>,
+    pub status: JobRunStatus,
+    pub attempt: i32,
+    pub duration_ms: Option<i64>,
+}
+
+impl From<JobRunSummary> for RunSummaryResponse {
+    fn from(r: JobRunSummary) -> Self {
+        RunSummaryResponse {
+            id: r.id,
+            task_id: r.task_id,
+            started_at: r.started_at,
+            finished_at: r.finished_at,
+            exit_code: r.exit_code,
             status: r.status,
             attempt: r.attempt,
             duration_ms: r.duration_ms,
@@ -133,6 +179,34 @@ pub async fn list_runs(
     };
 
     let since = query.since.as_deref();
+    if query.include_output == Some(false) {
+        return match db::runs::list_job_run_summaries(
+            &conn,
+            query.task_id.as_deref(),
+            query.status.as_deref(),
+            effective_limit(query.limit, since),
+            query.offset,
+        )
+        .await
+        {
+            Ok(runs) => {
+                let responses: Vec<RunSummaryResponse> = apply_since_summary(runs, since)
+                    .into_iter()
+                    .map(RunSummaryResponse::from)
+                    .collect();
+                (StatusCode::OK, Json(json!(responses))).into_response()
+            }
+            Err(e) => {
+                error!("Failed to list run summaries: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": "Internal server error"})),
+                )
+                    .into_response()
+            }
+        };
+    }
+
     match db::runs::list_job_runs(
         &conn,
         query.task_id.as_deref(),
@@ -161,10 +235,7 @@ pub async fn list_runs(
 }
 
 /// GET /api/v1/runs/:id
-pub async fn get_run(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> impl IntoResponse {
+pub async fn get_run(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
     let conn = match state.db.connect().await {
         Ok(c) => c,
         Err(e) => {
@@ -286,6 +357,34 @@ pub async fn list_task_runs(
     }
 
     let since = query.since.as_deref();
+    if query.include_output == Some(false) {
+        return match db::runs::list_job_run_summaries(
+            &conn,
+            Some(&task_id),
+            query.status.as_deref(),
+            effective_limit(query.limit, since),
+            query.offset,
+        )
+        .await
+        {
+            Ok(runs) => {
+                let responses: Vec<RunSummaryResponse> = apply_since_summary(runs, since)
+                    .into_iter()
+                    .map(RunSummaryResponse::from)
+                    .collect();
+                (StatusCode::OK, Json(json!(responses))).into_response()
+            }
+            Err(e) => {
+                error!("Failed to list task run summaries: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": "Internal server error"})),
+                )
+                    .into_response()
+            }
+        };
+    }
+
     match db::runs::list_job_runs(
         &conn,
         Some(&task_id),

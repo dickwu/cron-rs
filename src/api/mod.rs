@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod dashboard;
 pub mod events;
 pub mod hooks;
 pub mod middleware;
@@ -15,15 +16,13 @@ use axum::response::IntoResponse;
 use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use serde_json::json;
+use tokio::sync::RwLock;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing::error;
 
 use crate::config::Config;
-use crate::db;
-use crate::db::helpers::parse_run_ts;
 use crate::db::Database;
-use crate::models::JobRunStatus;
 use crate::systemd::SystemdManager;
 
 use self::middleware::JwtSecret;
@@ -35,6 +34,7 @@ pub struct AppState {
     pub systemd: Arc<dyn SystemdManager>,
     pub config: Arc<Config>,
     pub event_bus: crate::event_bus::EventBus,
+    pub dashboard_cache: Arc<RwLock<dashboard::DashboardCache>>,
 }
 
 /// Build the Axum router with all routes.
@@ -70,6 +70,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/runs/{id}", get(runs::get_run))
         .route("/api/v1/runs/{id}/hooks", get(runs::list_hook_runs))
         .route("/api/v1/tasks/{id}/runs", get(runs::list_task_runs))
+        // Dashboard
+        .route("/api/v1/dashboard/summary", get(dashboard::summary))
+        .route("/api/v1/dashboard/runs", get(dashboard::recent_runs))
+        .route("/api/v1/dashboard/activity", get(dashboard::activity))
         // Settings
         .route("/api/v1/settings", get(settings::get_settings))
         .route("/api/v1/settings", put(settings::update_settings))
@@ -96,82 +100,15 @@ async fn health() -> impl IntoResponse {
 
 /// GET /api/v1/status — authenticated status overview
 async fn status(State(state): State<AppState>) -> impl IntoResponse {
-    let conn = match state.db.connect().await {
-        Ok(c) => c,
+    match dashboard::summary_data(&state).await {
+        Ok(summary) => (StatusCode::OK, Json(summary)).into_response(),
         Err(e) => {
-            error!("Database connection error: {}", e);
-            return (
+            error!("Failed to load status: {}", e);
+            (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({"error": "Internal server error"})),
             )
-                .into_response();
-        }
-    };
-
-    // Count tasks
-    let task_count = match db::tasks::list(&conn).await {
-        Ok(tasks) => tasks.len(),
-        Err(_) => 0,
-    };
-
-    // Count active timers
-    let active_timers = match db::tasks::list(&conn).await {
-        Ok(tasks) => {
-            let mut count = 0u64;
-            for task in &tasks {
-                if task.enabled {
-                    if let Ok(true) = state.systemd.is_timer_active(&task.name).await {
-                        count += 1;
-                    }
-                }
-            }
-            count
-        }
-        Err(_) => 0,
-    };
-
-    // Aggregate the last 24h in Rust so the cutoff comparison is correct across
-    // both RFC 3339 and legacy naïve timestamp formats (lex comparison breaks
-    // when one side has a `T` separator and the other has a space).
-    let cutoff = chrono::Utc::now() - chrono::Duration::hours(24);
-    let mut runs_24h: u64 = 0;
-    let mut success_24h: u64 = 0;
-    let mut failed_24h: u64 = 0;
-    if let Ok(runs) = db::runs::list_job_runs(&conn, None, None, Some(5000), Some(0)).await {
-        for r in &runs {
-            let Some(ts) = parse_run_ts(&r.started_at) else { continue };
-            if ts < cutoff {
-                continue;
-            }
-            runs_24h += 1;
-            match r.status {
-                JobRunStatus::Success => success_24h += 1,
-                JobRunStatus::Failed | JobRunStatus::Timeout | JobRunStatus::Crashed => {
-                    failed_24h += 1
-                }
-                _ => {}
-            }
+                .into_response()
         }
     }
-
-    let finished_24h = success_24h + failed_24h;
-    let success_rate = if finished_24h > 0 {
-        (success_24h as f64 / finished_24h as f64) * 100.0
-    } else {
-        // No finished runs in the window — nothing to grade. Show 100% rather
-        // than 0% so a quiet installation doesn't look like it's on fire.
-        100.0
-    };
-
-    (
-        StatusCode::OK,
-        Json(json!({
-            "task_count": task_count,
-            "active_timers": active_timers,
-            "runs_24h": runs_24h,
-            "success_rate": success_rate,
-            "recent_failures_24h": failed_24h,
-        })),
-    )
-        .into_response()
 }

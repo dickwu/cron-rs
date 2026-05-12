@@ -32,17 +32,12 @@ pub struct CreateTaskRequest {
     pub sandbox_profile: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 enum OptionalStringUpdate {
+    #[default]
     Missing,
     Clear,
     Set(String),
-}
-
-impl Default for OptionalStringUpdate {
-    fn default() -> Self {
-        Self::Missing
-    }
 }
 
 impl<'de> Deserialize<'de> for OptionalStringUpdate {
