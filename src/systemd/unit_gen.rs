@@ -132,8 +132,38 @@ pub fn generate_service_unit(task: &Task, db_path: &str) -> String {
     generate_service_for_task(task, &binary_path, db_path)
 }
 
+/// Detect whether an OnCalendar expression already carries an explicit timezone
+/// suffix. systemd accepts an optional zone as the last whitespace-separated
+/// token (e.g. `*-*-* 09:00:00 America/Vancouver`). Region/city zones contain
+/// `/`; the bare `UTC` alias is also recognized.
+fn schedule_has_timezone(schedule: &str) -> bool {
+    match schedule.split_whitespace().next_back() {
+        Some(last) => last.contains('/') || last.eq_ignore_ascii_case("UTC"),
+        None => false,
+    }
+}
+
+/// Append `tz` to an OnCalendar expression so timers fire in that zone instead
+/// of the host's system zone. No-op when `tz` is empty/whitespace or when the
+/// schedule already carries a zone.
+fn apply_timezone_with(schedule: &str, tz: &str) -> String {
+    let tz = tz.trim();
+    if tz.is_empty() || schedule_has_timezone(schedule) {
+        schedule.to_string()
+    } else {
+        format!("{} {}", schedule, tz)
+    }
+}
+
+/// Convenience wrapper that reads `CRON_RS_TIMEZONE` from the environment.
+fn apply_timezone(schedule: &str) -> String {
+    let tz = std::env::var("CRON_RS_TIMEZONE").unwrap_or_default();
+    apply_timezone_with(schedule, &tz)
+}
+
 /// Generate a .timer unit file content from raw parameters.
 pub fn generate_timer(task_name: &str, schedule: &str) -> String {
+    let schedule = apply_timezone(schedule);
     format!(
         "[Unit]\n\
          Description=cron-rs timer: {task_name}\n\
@@ -284,6 +314,40 @@ mod tests {
         assert!(content.contains("OnCalendar=*-*-* 02:00:00"));
         assert!(content.contains("Persistent=true"));
         assert!(content.contains("WantedBy=timers.target"));
+    }
+
+    #[test]
+    fn test_schedule_has_timezone() {
+        assert!(schedule_has_timezone("*-*-* 09:00:00 America/Vancouver"));
+        assert!(schedule_has_timezone("Mon..Fri *-*-* 09:00:00 Europe/Berlin"));
+        assert!(schedule_has_timezone("*-*-* 09:00:00 utc"));
+        assert!(!schedule_has_timezone("*-*-* 09:00:00"));
+        assert!(!schedule_has_timezone("Mon..Fri *-*-* 09:00:00"));
+    }
+
+    #[test]
+    fn test_apply_timezone_with_appends() {
+        assert_eq!(
+            apply_timezone_with("*-*-* 09:00:00", "America/Vancouver"),
+            "*-*-* 09:00:00 America/Vancouver"
+        );
+    }
+
+    #[test]
+    fn test_apply_timezone_with_skips_when_already_zoned() {
+        assert_eq!(
+            apply_timezone_with("*-*-* 09:00:00 Europe/Berlin", "America/Vancouver"),
+            "*-*-* 09:00:00 Europe/Berlin"
+        );
+    }
+
+    #[test]
+    fn test_apply_timezone_with_empty_is_noop() {
+        assert_eq!(apply_timezone_with("*-*-* 09:00:00", ""), "*-*-* 09:00:00");
+        assert_eq!(
+            apply_timezone_with("*-*-* 09:00:00", "   "),
+            "*-*-* 09:00:00"
+        );
     }
 
     #[test]

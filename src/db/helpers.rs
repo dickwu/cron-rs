@@ -128,7 +128,13 @@ pub fn new_uuid() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
-/// Get the current UTC timestamp as an ISO 8601 string (matching SQLite's datetime format).
+/// Current UTC timestamp as an RFC 3339 string with explicit `Z` suffix.
+///
+/// The `Z` makes the value self-describing so any consumer (JS `new Date(...)`,
+/// Python `datetime.fromisoformat`, `chrono::DateTime::parse_from_rfc3339`) parses
+/// it as UTC instead of guessing the local zone. Stored alongside legacy rows
+/// that lack a timezone marker — both sort correctly because the `T` separator
+/// (0x54) is greater than the space separator (0x20).
 pub fn now_timestamp() -> String {
-    chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }

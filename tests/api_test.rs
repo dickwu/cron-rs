@@ -132,6 +132,7 @@ fn test_config(db_path: &PathBuf) -> Config {
         db_path: db_path.clone(),
         token_expiry: "24h".to_string(),
         config_dir: PathBuf::from("/tmp"),
+        timezone: String::new(),
     }
 }
 

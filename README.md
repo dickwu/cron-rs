@@ -161,6 +161,7 @@ Configuration is stored in `~/cron-rs/.env` (created by `cron-rs init`).
 | `CRON_RS_TOKEN_EXPIRY` | `24h` | JWT token expiry |
 | `CRON_RS_CONFIG_DIR` | `~/cron-rs` | Config directory |
 | `CRON_RS_CORS_ORIGIN` | -- | CORS origin (for external web UI) |
+| `CRON_RS_TIMEZONE` | -- | IANA zone (e.g. `America/Vancouver`) appended to every generated `OnCalendar=` so timers fire in that zone instead of the host system zone. Run `cron-rs regenerate` after changing. |
 
 ## Importing Existing Schedules
 

@@ -11,6 +11,11 @@ pub struct Config {
     pub token_expiry: String,
     #[allow(dead_code)]
     pub config_dir: PathBuf,
+    /// Optional IANA zone (e.g. `America/Vancouver`) appended to every
+    /// generated systemd `OnCalendar=` expression so timers fire in the
+    /// user's zone instead of the host system zone. Empty = honor system zone.
+    #[allow(dead_code)]
+    pub timezone: String,
 }
 
 impl Config {
@@ -80,6 +85,10 @@ impl Config {
             token_expiry: std::env::var("CRON_RS_TOKEN_EXPIRY")
                 .unwrap_or_else(|_| "24h".to_string()),
             config_dir,
+            timezone: std::env::var("CRON_RS_TIMEZONE")
+                .unwrap_or_default()
+                .trim()
+                .to_string(),
         })
     }
 }
