@@ -80,7 +80,9 @@ async fn ensure_token(base_url: &str, client: &reqwest::Client) -> anyhow::Resul
         let body: serde_json::Value = resp.json().await.unwrap_or_default();
         anyhow::bail!(
             "Login failed: {}",
-            body.get("error").and_then(|e| e.as_str()).unwrap_or("unknown error")
+            body.get("error")
+                .and_then(|e| e.as_str())
+                .unwrap_or("unknown error")
         );
     }
 
@@ -151,11 +153,11 @@ fn print_hook_table(hooks: &[serde_json::Value]) {
 
     for hook in hooks {
         let id = hook.get("id").and_then(|v| v.as_str()).unwrap_or("-");
-        let hook_type = hook.get("hook_type").and_then(|v| v.as_str()).unwrap_or("-");
-        let run_order = hook
-            .get("run_order")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0);
+        let hook_type = hook
+            .get("hook_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("-");
+        let run_order = hook.get("run_order").and_then(|v| v.as_i64()).unwrap_or(0);
         let timeout = hook
             .get("timeout_secs")
             .and_then(|v| v.as_i64())
@@ -234,7 +236,9 @@ async fn hook_add(
         );
         println!(
             "  Type:    {}",
-            hook.get("hook_type").and_then(|v| v.as_str()).unwrap_or("-")
+            hook.get("hook_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("-")
         );
         println!(
             "  Command: {}",
@@ -244,7 +248,9 @@ async fn hook_add(
         let body: serde_json::Value = resp.json().await.unwrap_or_default();
         anyhow::bail!(
             "Failed to add hook: {}",
-            body.get("error").and_then(|e| e.as_str()).unwrap_or("unknown error")
+            body.get("error")
+                .and_then(|e| e.as_str())
+                .unwrap_or("unknown error")
         );
     }
 
@@ -285,7 +291,9 @@ async fn hook_list(config: &Config, task: &str) -> anyhow::Result<()> {
                 let body: serde_json::Value = resp.json().await.unwrap_or_default();
                 eprintln!(
                     "Error: {}",
-                    body.get("error").and_then(|e| e.as_str()).unwrap_or("unknown error")
+                    body.get("error")
+                        .and_then(|e| e.as_str())
+                        .unwrap_or("unknown error")
                 );
             }
             Ok(())
@@ -333,7 +341,9 @@ async fn hook_remove(config: &Config, hook_id: &str) -> anyhow::Result<()> {
         let body: serde_json::Value = resp.json().await.unwrap_or_default();
         anyhow::bail!(
             "Failed to remove hook: {}",
-            body.get("error").and_then(|e| e.as_str()).unwrap_or("unknown error")
+            body.get("error")
+                .and_then(|e| e.as_str())
+                .unwrap_or("unknown error")
         );
     }
 

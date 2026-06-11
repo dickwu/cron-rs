@@ -20,8 +20,11 @@ pub async fn events(
         Err(_) => None,
     });
 
-    let heartbeat = IntervalStream::new(tokio::time::interval(Duration::from_secs(15)))
-        .map(|_| Ok(Event::default().event("heartbeat").data(r#"{"status":"ok"}"#)));
+    let heartbeat = IntervalStream::new(tokio::time::interval(Duration::from_secs(15))).map(|_| {
+        Ok(Event::default()
+            .event("heartbeat")
+            .data(r#"{"status":"ok"}"#))
+    });
 
     let merged = bus_stream.merge(heartbeat);
 

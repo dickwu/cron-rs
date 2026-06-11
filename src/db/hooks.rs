@@ -1,4 +1,4 @@
-use crate::db::helpers::{now_timestamp, new_uuid, DbError, FromRow};
+use crate::db::helpers::{new_uuid, now_timestamp, DbError, FromRow};
 use crate::models::{Hook, HookType};
 use libsql::Connection;
 
@@ -12,9 +12,17 @@ fn opt_string_to_value(value: &Option<String>) -> libsql::Value {
 /// Insert a new hook into the database.
 /// Generates an id and created_at if they are empty.
 pub async fn create(conn: &Connection, hook: &Hook) -> Result<Hook, DbError> {
-    let id = if hook.id.is_empty() { new_uuid() } else { hook.id.clone() };
+    let id = if hook.id.is_empty() {
+        new_uuid()
+    } else {
+        hook.id.clone()
+    };
     let now = now_timestamp();
-    let created_at = if hook.created_at.is_empty() { now } else { hook.created_at.clone() };
+    let created_at = if hook.created_at.is_empty() {
+        now
+    } else {
+        hook.created_at.clone()
+    };
 
     let timeout_val: libsql::Value = match hook.timeout_secs {
         Some(v) => libsql::Value::Integer(v as i64),

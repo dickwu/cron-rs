@@ -80,7 +80,9 @@ async fn ensure_token(base_url: &str, client: &reqwest::Client) -> anyhow::Resul
         let body: serde_json::Value = resp.json().await.unwrap_or_default();
         anyhow::bail!(
             "Login failed: {}",
-            body.get("error").and_then(|e| e.as_str()).unwrap_or("unknown error")
+            body.get("error")
+                .and_then(|e| e.as_str())
+                .unwrap_or("unknown error")
         );
     }
 
@@ -153,7 +155,10 @@ fn print_runs_table(runs: &[serde_json::Value]) {
         let id = run.get("id").and_then(|v| v.as_str()).unwrap_or("-");
         let task_id = run.get("task_id").and_then(|v| v.as_str()).unwrap_or("-");
         let status = run.get("status").and_then(|v| v.as_str()).unwrap_or("-");
-        let started = run.get("started_at").and_then(|v| v.as_str()).unwrap_or("-");
+        let started = run
+            .get("started_at")
+            .and_then(|v| v.as_str())
+            .unwrap_or("-");
         let exit_code = run
             .get("exit_code")
             .and_then(|v| v.as_i64())
@@ -175,12 +180,32 @@ fn print_runs_table(runs: &[serde_json::Value]) {
 /// Format a single run for detailed display.
 fn print_run_detail(run: &serde_json::Value) {
     println!("Run Details:");
-    println!("  ID:          {}", run.get("id").and_then(|v| v.as_str()).unwrap_or("-"));
-    println!("  Task ID:     {}", run.get("task_id").and_then(|v| v.as_str()).unwrap_or("-"));
-    println!("  Status:      {}", run.get("status").and_then(|v| v.as_str()).unwrap_or("-"));
-    println!("  Attempt:     {}", run.get("attempt").and_then(|v| v.as_i64()).unwrap_or(0));
-    println!("  Started At:  {}", run.get("started_at").and_then(|v| v.as_str()).unwrap_or("-"));
-    let finished = run.get("finished_at").and_then(|v| v.as_str()).unwrap_or("-");
+    println!(
+        "  ID:          {}",
+        run.get("id").and_then(|v| v.as_str()).unwrap_or("-")
+    );
+    println!(
+        "  Task ID:     {}",
+        run.get("task_id").and_then(|v| v.as_str()).unwrap_or("-")
+    );
+    println!(
+        "  Status:      {}",
+        run.get("status").and_then(|v| v.as_str()).unwrap_or("-")
+    );
+    println!(
+        "  Attempt:     {}",
+        run.get("attempt").and_then(|v| v.as_i64()).unwrap_or(0)
+    );
+    println!(
+        "  Started At:  {}",
+        run.get("started_at")
+            .and_then(|v| v.as_str())
+            .unwrap_or("-")
+    );
+    let finished = run
+        .get("finished_at")
+        .and_then(|v| v.as_str())
+        .unwrap_or("-");
     println!("  Finished At: {}", finished);
     let exit_code = run
         .get("exit_code")
@@ -275,7 +300,9 @@ async fn runs_list(
                 let body: serde_json::Value = resp.json().await.unwrap_or_default();
                 eprintln!(
                     "Error: {}",
-                    body.get("error").and_then(|e| e.as_str()).unwrap_or("unknown error")
+                    body.get("error")
+                        .and_then(|e| e.as_str())
+                        .unwrap_or("unknown error")
                 );
             }
             Ok(())
@@ -349,7 +376,9 @@ async fn runs_show(config: &Config, run_id: &str) -> anyhow::Result<()> {
                 let body: serde_json::Value = resp.json().await.unwrap_or_default();
                 anyhow::bail!(
                     "Error: {}",
-                    body.get("error").and_then(|e| e.as_str()).unwrap_or("unknown error")
+                    body.get("error")
+                        .and_then(|e| e.as_str())
+                        .unwrap_or("unknown error")
                 );
             }
             Ok(())

@@ -91,8 +91,7 @@ pub async fn list_all_hooks(State(state): State<AppState>) -> impl IntoResponse 
 
     match db::hooks::list_all(&conn).await {
         Ok(hooks) => {
-            let responses: Vec<HookResponse> =
-                hooks.into_iter().map(HookResponse::from).collect();
+            let responses: Vec<HookResponse> = hooks.into_iter().map(HookResponse::from).collect();
             (StatusCode::OK, Json(json!(responses))).into_response()
         }
         Err(e) => {
@@ -122,8 +121,7 @@ pub async fn list_global_hooks(State(state): State<AppState>) -> impl IntoRespon
 
     match db::hooks::list_global(&conn).await {
         Ok(hooks) => {
-            let responses: Vec<HookResponse> =
-                hooks.into_iter().map(HookResponse::from).collect();
+            let responses: Vec<HookResponse> = hooks.into_iter().map(HookResponse::from).collect();
             (StatusCode::OK, Json(json!(responses))).into_response()
         }
         Err(e) => {
@@ -174,8 +172,7 @@ pub async fn list_hooks(
 
     match db::hooks::list_for_task(&conn, &task_id).await {
         Ok(hooks) => {
-            let responses: Vec<HookResponse> =
-                hooks.into_iter().map(HookResponse::from).collect();
+            let responses: Vec<HookResponse> = hooks.into_iter().map(HookResponse::from).collect();
             (StatusCode::OK, Json(json!(responses))).into_response()
         }
         Err(e) => {

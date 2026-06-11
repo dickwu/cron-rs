@@ -87,12 +87,7 @@ pub async fn execute_command(
                 }
 
                 // Grace period: wait 5 seconds for graceful shutdown
-                match tokio::time::timeout(
-                    std::time::Duration::from_secs(5),
-                    child.wait(),
-                )
-                .await
-                {
+                match tokio::time::timeout(std::time::Duration::from_secs(5), child.wait()).await {
                     Ok(Ok(_)) => {
                         // Process exited after SIGTERM
                     }

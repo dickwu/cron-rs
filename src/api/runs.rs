@@ -174,8 +174,7 @@ pub async fn list_runs(
     .await
     {
         Ok(runs) => {
-            let responses: Vec<RunResponse> =
-                runs.into_iter().map(RunResponse::from).collect();
+            let responses: Vec<RunResponse> = runs.into_iter().map(RunResponse::from).collect();
             (StatusCode::OK, Json(json!(responses))).into_response()
         }
         Err(e) => {
@@ -350,8 +349,7 @@ pub async fn list_task_runs(
     .await
     {
         Ok(runs) => {
-            let responses: Vec<RunResponse> =
-                runs.into_iter().map(RunResponse::from).collect();
+            let responses: Vec<RunResponse> = runs.into_iter().map(RunResponse::from).collect();
             (StatusCode::OK, Json(json!(responses))).into_response()
         }
         Err(e) => {

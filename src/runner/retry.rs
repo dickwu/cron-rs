@@ -29,10 +29,10 @@ mod tests {
 
     #[test]
     fn test_retry_delay_exponential() {
-        assert_eq!(retry_delay_secs(5, 1), 5);   // 5 * 2^0 = 5
-        assert_eq!(retry_delay_secs(5, 2), 10);  // 5 * 2^1 = 10
-        assert_eq!(retry_delay_secs(5, 3), 20);  // 5 * 2^2 = 20
-        assert_eq!(retry_delay_secs(5, 4), 40);  // 5 * 2^3 = 40
+        assert_eq!(retry_delay_secs(5, 1), 5); // 5 * 2^0 = 5
+        assert_eq!(retry_delay_secs(5, 2), 10); // 5 * 2^1 = 10
+        assert_eq!(retry_delay_secs(5, 3), 20); // 5 * 2^2 = 20
+        assert_eq!(retry_delay_secs(5, 4), 40); // 5 * 2^3 = 40
     }
 
     #[test]

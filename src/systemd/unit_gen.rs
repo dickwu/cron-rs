@@ -319,7 +319,9 @@ mod tests {
     #[test]
     fn test_schedule_has_timezone() {
         assert!(schedule_has_timezone("*-*-* 09:00:00 America/Vancouver"));
-        assert!(schedule_has_timezone("Mon..Fri *-*-* 09:00:00 Europe/Berlin"));
+        assert!(schedule_has_timezone(
+            "Mon..Fri *-*-* 09:00:00 Europe/Berlin"
+        ));
         assert!(schedule_has_timezone("*-*-* 09:00:00 utc"));
         assert!(!schedule_has_timezone("*-*-* 09:00:00"));
         assert!(!schedule_has_timezone("Mon..Fri *-*-* 09:00:00"));

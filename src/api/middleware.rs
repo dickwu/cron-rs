@@ -1,9 +1,9 @@
 use axum::extract::Request;
 use axum::http::header::AUTHORIZATION;
+use axum::http::StatusCode;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use axum::http::StatusCode;
-use jsonwebtoken::{decode, DecodingKey, Validation, Algorithm};
+use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -17,10 +17,7 @@ pub struct Claims {
 /// JWT authentication middleware.
 /// Validates the Authorization: Bearer <token> header and injects claims
 /// into request extensions.
-pub async fn require_auth(
-    request: Request,
-    next: Next,
-) -> Result<Response, Response> {
+pub async fn require_auth(request: Request, next: Next) -> Result<Response, Response> {
     let jwt_secret = request
         .extensions()
         .get::<JwtSecret>()

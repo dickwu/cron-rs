@@ -40,13 +40,7 @@ fn open_lock_file(path: &Path) -> anyhow::Result<RawFd> {
             .ok_or_else(|| anyhow::anyhow!("Invalid lock path"))?,
     )?;
 
-    let fd = unsafe {
-        libc::open(
-            path_cstr.as_ptr(),
-            libc::O_CREAT | libc::O_RDWR,
-            0o644,
-        )
-    };
+    let fd = unsafe { libc::open(path_cstr.as_ptr(), libc::O_CREAT | libc::O_RDWR, 0o644) };
 
     if fd < 0 {
         return Err(anyhow::anyhow!(

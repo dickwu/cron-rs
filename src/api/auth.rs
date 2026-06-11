@@ -6,8 +6,8 @@ use jsonwebtoken::{encode, EncodingKey, Header};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use super::AppState;
 use super::middleware::Claims;
+use super::AppState;
 
 #[derive(Debug, Deserialize)]
 pub struct LoginRequest {
