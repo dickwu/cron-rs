@@ -236,9 +236,30 @@ impl SystemdManager for Systemctl {
         Ok(())
     }
 
-    async fn is_timer_active(&self, task_name: &str) -> Result<bool> {
-        let timer = unit_gen::timer_filename(task_name);
-        let output = self.run_systemctl_no_fail(&["is-active", &timer]).await?;
+    async fn is_service_active(&self, task_name: &str) -> Result<bool> {
+        let service = unit_gen::service_filename(task_name);
+        let output = self.run_systemctl_no_fail(&["is-active", &service]).await?;
         Ok(output.status.success())
+    }
+
+    async fn active_timer_names(&self) -> Result<std::collections::HashSet<String>> {
+        let output = self
+            .run_systemctl_no_fail(&[
+                "list-units",
+                "--type=timer",
+                "--state=active",
+                "--no-legend",
+                "--plain",
+                "cron-rs-*.timer",
+            ])
+            .await?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        Ok(stdout
+            .lines()
+            .filter_map(|line| line.split_whitespace().next())
+            .filter(|unit| unit.ends_with(".timer"))
+            .map(|unit| unit.to_string())
+            .collect())
     }
 }

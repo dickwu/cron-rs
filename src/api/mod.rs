@@ -75,6 +75,11 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/dashboard/summary", get(dashboard::summary))
         .route("/api/v1/dashboard/runs", get(dashboard::recent_runs))
         .route("/api/v1/dashboard/activity", get(dashboard::activity))
+        .route("/api/v1/dashboard/heatmap", get(dashboard::heatmap))
+        .route(
+            "/api/v1/dashboard/task-activity",
+            get(dashboard::task_activity),
+        )
         // Settings
         .route("/api/v1/settings", get(settings::get_settings))
         .route("/api/v1/settings", put(settings::update_settings))

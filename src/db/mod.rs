@@ -39,6 +39,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "007_normalize_started_at",
         include_str!("../../migrations/007_normalize_started_at.sql"),
     ),
+    (
+        "008_job_runs_status_index",
+        include_str!("../../migrations/008_job_runs_status_index.sql"),
+    ),
 ];
 
 struct DatabaseInner {

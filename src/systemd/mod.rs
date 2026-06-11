@@ -22,6 +22,10 @@ pub trait SystemdManager: Send + Sync {
     async fn stop_timer(&self, task_name: &str) -> anyhow::Result<()>;
     /// Reload the systemd daemon to pick up unit file changes.
     async fn daemon_reload(&self) -> anyhow::Result<()>;
-    /// Check whether the timer for the given task is currently active.
-    async fn is_timer_active(&self, task_name: &str) -> anyhow::Result<bool>;
+    /// Check whether the oneshot service for the given task is currently
+    /// active, i.e. a run is executing right now.
+    async fn is_service_active(&self, task_name: &str) -> anyhow::Result<bool>;
+    /// Unit names (`cron-rs-<task>.timer`) of all currently active cron-rs
+    /// timers, fetched with a single systemctl invocation.
+    async fn active_timer_names(&self) -> anyhow::Result<std::collections::HashSet<String>>;
 }

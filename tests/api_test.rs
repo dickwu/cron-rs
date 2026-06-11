@@ -17,17 +17,26 @@ use cron_rs::systemd::SystemdManager;
 #[derive(Clone, Default)]
 struct MockSystemdManager {
     calls: Arc<Mutex<Vec<String>>>,
+    active_timers: Arc<Mutex<std::collections::HashSet<String>>>,
 }
 
 impl MockSystemdManager {
     fn new() -> Self {
         Self {
             calls: Arc::new(Mutex::new(Vec::new())),
+            active_timers: Arc::new(Mutex::new(std::collections::HashSet::new())),
         }
     }
 
     fn get_calls(&self) -> Vec<String> {
         self.calls.lock().unwrap().clone()
+    }
+
+    fn set_timer_active(&self, unit_name: &str) {
+        self.active_timers
+            .lock()
+            .unwrap()
+            .insert(unit_name.to_string());
     }
 }
 
@@ -86,12 +95,20 @@ impl SystemdManager for MockSystemdManager {
         Ok(())
     }
 
-    async fn is_timer_active(&self, task_name: &str) -> anyhow::Result<bool> {
+    async fn is_service_active(&self, task_name: &str) -> anyhow::Result<bool> {
         self.calls
             .lock()
             .unwrap()
-            .push(format!("is_timer_active:{}", task_name));
-        Ok(true)
+            .push(format!("is_service_active:{}", task_name));
+        Ok(false)
+    }
+
+    async fn active_timer_names(&self) -> anyhow::Result<std::collections::HashSet<String>> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push("active_timer_names".to_string());
+        Ok(self.active_timers.lock().unwrap().clone())
     }
 }
 
@@ -1304,6 +1321,208 @@ async fn duplicate_task_name_returns_409() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::CONFLICT);
+
+    cleanup_db(&path);
+}
+
+// --- Dashboard aggregation tests ---
+
+async fn seed_run(
+    conn: &libsql::Connection,
+    task_id: &str,
+    status: cron_rs::models::JobRunStatus,
+    started_at: chrono::DateTime<chrono::Utc>,
+) {
+    let run = JobRun {
+        id: String::new(),
+        task_id: task_id.to_string(),
+        started_at: started_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        finished_at: None,
+        exit_code: None,
+        stdout: String::new(),
+        stderr: String::new(),
+        status,
+        attempt: 1,
+        duration_ms: Some(10),
+    };
+    db::runs::create_job_run(conn, &run).await.unwrap();
+}
+
+async fn create_enabled_task(app: &axum::Router, token: &str, name: &str) -> String {
+    let body = serde_json::json!({
+        "name": name,
+        "command": "/bin/true",
+        "schedule": "*-*-* 03:00:00",
+    });
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(http::Method::POST)
+                .uri("/api/v1/tasks")
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .header(http::header::AUTHORIZATION, auth_header(token))
+                .body(Body::from(serde_json::to_string(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let task: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let id = task["id"].as_str().unwrap().to_string();
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(http::Method::POST)
+                .uri(format!("/api/v1/tasks/{}/enable", id))
+                .header(http::header::AUTHORIZATION, auth_header(token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    id
+}
+
+async fn get_json(app: &axum::Router, token: &str, uri: &str) -> serde_json::Value {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(http::Method::GET)
+                .uri(uri)
+                .header(http::header::AUTHORIZATION, auth_header(token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK, "GET {} failed", uri);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+#[tokio::test]
+async fn dashboard_summary_counts_exactly_and_batches_timer_lookup() {
+    let (app, path, mock) = setup_app().await;
+    let token = login(&app).await;
+
+    let task_id = create_enabled_task(&app, &token, "summary-task").await;
+    mock.set_timer_active("cron-rs-summary-task.timer");
+
+    let database = db::Database::new(&path).await.unwrap();
+    let conn = database.connect().await.unwrap();
+    let now = chrono::Utc::now();
+    use cron_rs::models::JobRunStatus as S;
+    for _ in 0..3 {
+        seed_run(
+            &conn,
+            &task_id,
+            S::Success,
+            now - chrono::Duration::hours(1),
+        )
+        .await;
+    }
+    seed_run(&conn, &task_id, S::Failed, now - chrono::Duration::hours(2)).await;
+    seed_run(
+        &conn,
+        &task_id,
+        S::Timeout,
+        now - chrono::Duration::hours(2),
+    )
+    .await;
+    // Outside the 24h window: must not be counted.
+    seed_run(
+        &conn,
+        &task_id,
+        S::Success,
+        now - chrono::Duration::hours(30),
+    )
+    .await;
+
+    let summary = get_json(&app, &token, "/api/v1/dashboard/summary").await;
+    assert_eq!(summary["runs_24h"], 5);
+    assert_eq!(summary["recent_failures_24h"], 2);
+    assert_eq!(summary["task_count"], 1);
+    assert_eq!(summary["active_timers"], 1);
+    assert!((summary["success_rate"].as_f64().unwrap() - 60.0).abs() < 0.001);
+
+    // The timer state must come from one batched call, not one per task.
+    let calls = mock.get_calls();
+    assert!(calls.contains(&"active_timer_names".to_string()));
+
+    cleanup_db(&path);
+}
+
+#[tokio::test]
+async fn dashboard_heatmap_aggregates_daily_counts() {
+    let (app, path, _mock) = setup_app().await;
+    let token = login(&app).await;
+    let task_id = create_enabled_task(&app, &token, "heatmap-task").await;
+
+    let database = db::Database::new(&path).await.unwrap();
+    let conn = database.connect().await.unwrap();
+    use cron_rs::models::JobRunStatus as S;
+    let recent = chrono::Utc::now() - chrono::Duration::hours(1);
+    let earlier = chrono::Utc::now() - chrono::Duration::hours(26);
+    seed_run(&conn, &task_id, S::Success, recent).await;
+    seed_run(&conn, &task_id, S::Success, recent).await;
+    seed_run(&conn, &task_id, S::Failed, recent).await;
+    seed_run(&conn, &task_id, S::Timeout, earlier).await;
+
+    let heatmap = get_json(&app, &token, "/api/v1/dashboard/heatmap").await;
+    assert_eq!(heatmap["days"], 365);
+    let buckets = heatmap["buckets"].as_array().unwrap();
+    assert_eq!(buckets.len(), 2);
+
+    let earlier_date = earlier.format("%Y-%m-%d").to_string();
+    let recent_date = recent.format("%Y-%m-%d").to_string();
+    assert_eq!(buckets[0]["date"], earlier_date);
+    assert_eq!(buckets[0]["total"], 1);
+    assert_eq!(buckets[0]["failed"], 1);
+    assert_eq!(buckets[1]["date"], recent_date);
+    assert_eq!(buckets[1]["total"], 3);
+    assert_eq!(buckets[1]["failed"], 1);
+
+    cleanup_db(&path);
+}
+
+#[tokio::test]
+async fn dashboard_task_activity_returns_per_task_daily_rows() {
+    let (app, path, _mock) = setup_app().await;
+    let token = login(&app).await;
+    let task_a = create_enabled_task(&app, &token, "activity-a").await;
+    let task_b = create_enabled_task(&app, &token, "activity-b").await;
+
+    let database = db::Database::new(&path).await.unwrap();
+    let conn = database.connect().await.unwrap();
+    use cron_rs::models::JobRunStatus as S;
+    let at = chrono::Utc::now() - chrono::Duration::hours(1);
+    seed_run(&conn, &task_a, S::Success, at).await;
+    seed_run(&conn, &task_a, S::Success, at).await;
+    seed_run(&conn, &task_b, S::Failed, at).await;
+
+    let activity = get_json(&app, &token, "/api/v1/dashboard/task-activity?days=7").await;
+    assert_eq!(activity["days"], 7);
+    let rows = activity["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+
+    let date = at.format("%Y-%m-%d").to_string();
+    let row_a = rows
+        .iter()
+        .find(|r| r["task_id"] == task_a.as_str())
+        .expect("row for task a");
+    assert_eq!(row_a["date"], date);
+    assert_eq!(row_a["counts"]["success"], 2);
+    let row_b = rows
+        .iter()
+        .find(|r| r["task_id"] == task_b.as_str())
+        .expect("row for task b");
+    assert_eq!(row_b["counts"]["failed"], 1);
 
     cleanup_db(&path);
 }

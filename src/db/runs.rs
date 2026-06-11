@@ -159,11 +159,9 @@ fn build_runs_query(
     sql.push_str(" ORDER BY started_at DESC LIMIT ? OFFSET ?");
     // When the date filter does the heavy lifting, the default cap is large
     // enough to cover any realistic 30-day window without paging.
-    params.push(libsql::Value::Integer(limit.unwrap_or(if started_after.is_some() {
-        50_000
-    } else {
-        100
-    })));
+    params.push(libsql::Value::Integer(
+        limit.unwrap_or(if started_after.is_some() { 50_000 } else { 100 }),
+    ));
     params.push(libsql::Value::Integer(offset.unwrap_or(0)));
     (sql, params)
 }
@@ -252,16 +250,182 @@ pub async fn prune_runs_older_than(conn: &Connection, days: u32) -> Result<u64, 
 
 /// Mark all orphaned runs (status 'running' or 'retrying') as 'crashed'.
 /// Returns the number of rows updated.
-pub async fn mark_orphaned_runs_crashed(conn: &Connection) -> Result<u64, DbError> {
-    let rows_changed = conn
-        .execute(
-            "UPDATE job_runs SET status = 'crashed', finished_at = ?1
-             WHERE status IN ('running', 'retrying')",
-            [now_timestamp()],
+/// Record the PID of the `cron-rs run` process executing a run, so the orphan
+/// sweep can tell a dead runner from a live one.
+pub async fn set_runner_pid(conn: &Connection, id: &str, pid: i64) -> Result<(), DbError> {
+    conn.execute(
+        "UPDATE job_runs SET runner_pid = ?2 WHERE id = ?1",
+        libsql::params![id, pid],
+    )
+    .await?;
+    Ok(())
+}
+
+/// List runs still marked running/retrying, with their recorded runner PID.
+/// Candidates for the orphan sweep; whether each is truly orphaned is decided
+/// by checking the runner process and the task's service unit.
+pub async fn list_stuck_run_summaries(
+    conn: &Connection,
+) -> Result<Vec<(JobRunSummary, Option<i64>)>, DbError> {
+    let mut rows = conn
+        .query(
+            "SELECT id, task_id, started_at, finished_at, exit_code, status, attempt, duration_ms, runner_pid
+             FROM job_runs WHERE status IN ('running', 'retrying')
+             ORDER BY started_at ASC",
+            (),
         )
         .await?;
 
-    Ok(rows_changed)
+    let mut runs = Vec::new();
+    while let Some(row) = rows.next().await? {
+        let summary = JobRunSummary::from_row(&row)?;
+        let pid = row.get::<Option<i64>>(8)?;
+        runs.push((summary, pid));
+    }
+    Ok(runs)
+}
+
+/// Mark a single run as crashed. Guarded on status so a run that finished
+/// between sweep listing and this update is left untouched.
+pub async fn mark_run_crashed(conn: &Connection, id: &str) -> Result<bool, DbError> {
+    let rows_changed = conn
+        .execute(
+            "UPDATE job_runs SET status = 'crashed', finished_at = ?2
+             WHERE id = ?1 AND status IN ('running', 'retrying')",
+            libsql::params![id, now_timestamp()],
+        )
+        .await?;
+
+    Ok(rows_changed > 0)
+}
+
+/// Per-status run counts since the cutoff, aggregated in SQL so results are
+/// exact regardless of row volume.
+pub async fn status_counts_since(
+    conn: &Connection,
+    started_after: Option<&str>,
+) -> Result<Vec<(String, i64)>, DbError> {
+    let (sql, params) = if let Some(after) = started_after {
+        (
+            "SELECT status, COUNT(*) FROM job_runs WHERE started_at >= ?1 GROUP BY status",
+            vec![libsql::Value::Text(after.to_string())],
+        )
+    } else {
+        (
+            "SELECT status, COUNT(*) FROM job_runs GROUP BY status",
+            Vec::new(),
+        )
+    };
+
+    let mut rows = conn.query(sql, params).await?;
+    let mut counts = Vec::new();
+    while let Some(row) = rows.next().await? {
+        counts.push((row.get::<String>(0)?, row.get::<i64>(1)?));
+    }
+    Ok(counts)
+}
+
+/// Per-bucket, per-status run counts since the cutoff. `key_len` selects the
+/// bucket granularity over the normalized RFC 3339 UTC `started_at` column:
+/// 10 = day (`2026-06-11`), 13 = hour (`2026-06-11T14`).
+pub async fn bucket_status_counts(
+    conn: &Connection,
+    started_after: &str,
+    key_len: u8,
+) -> Result<Vec<(String, String, i64)>, DbError> {
+    let mut rows = conn
+        .query(
+            "SELECT substr(started_at, 1, ?2) AS bucket, status, COUNT(*)
+             FROM job_runs WHERE started_at >= ?1
+             GROUP BY bucket, status ORDER BY bucket ASC",
+            libsql::params![started_after, key_len as i64],
+        )
+        .await?;
+
+    let mut counts = Vec::new();
+    while let Some(row) = rows.next().await? {
+        counts.push((
+            row.get::<String>(0)?,
+            row.get::<String>(1)?,
+            row.get::<i64>(2)?,
+        ));
+    }
+    Ok(counts)
+}
+
+/// Per-task, per-status run counts since the cutoff.
+pub async fn per_task_status_counts(
+    conn: &Connection,
+    started_after: &str,
+) -> Result<Vec<(String, String, i64)>, DbError> {
+    let mut rows = conn
+        .query(
+            "SELECT task_id, status, COUNT(*)
+             FROM job_runs WHERE started_at >= ?1
+             GROUP BY task_id, status",
+            [started_after],
+        )
+        .await?;
+
+    let mut counts = Vec::new();
+    while let Some(row) = rows.next().await? {
+        counts.push((
+            row.get::<String>(0)?,
+            row.get::<String>(1)?,
+            row.get::<i64>(2)?,
+        ));
+    }
+    Ok(counts)
+}
+
+/// Per-task, per-day, per-status run counts since the cutoff. Feeds the tasks
+/// page activity sparklines without shipping raw run rows.
+pub async fn per_task_daily_status_counts(
+    conn: &Connection,
+    started_after: &str,
+) -> Result<Vec<(String, String, String, i64)>, DbError> {
+    let mut rows = conn
+        .query(
+            "SELECT task_id, substr(started_at, 1, 10) AS day, status, COUNT(*)
+             FROM job_runs WHERE started_at >= ?1
+             GROUP BY task_id, day, status ORDER BY day ASC",
+            [started_after],
+        )
+        .await?;
+
+    let mut counts = Vec::new();
+    while let Some(row) = rows.next().await? {
+        counts.push((
+            row.get::<String>(0)?,
+            row.get::<String>(1)?,
+            row.get::<String>(2)?,
+            row.get::<i64>(3)?,
+        ));
+    }
+    Ok(counts)
+}
+
+/// Most recent unsuccessful runs (failed/timeout/crashed) since the cutoff.
+pub async fn list_failed_run_summaries(
+    conn: &Connection,
+    started_after: &str,
+    limit: i64,
+) -> Result<Vec<JobRunSummary>, DbError> {
+    let mut rows = conn
+        .query(
+            "SELECT id, task_id, started_at, finished_at, exit_code, status, attempt, duration_ms
+             FROM job_runs
+             WHERE status IN ('failed', 'timeout', 'crashed') AND started_at >= ?1
+             ORDER BY started_at DESC LIMIT ?2",
+            libsql::params![started_after, limit],
+        )
+        .await?;
+
+    let mut runs = Vec::new();
+    while let Some(row) = rows.next().await? {
+        runs.push(JobRunSummary::from_row(&row)?);
+    }
+    Ok(runs)
 }
 
 /// Insert a new hook run.

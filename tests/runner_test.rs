@@ -73,7 +73,7 @@ async fn t5_command_succeeds_status_success() {
     assert_eq!(exit_code, 0, "Successful command should return exit code 0");
 
     // Verify the run record in DB
-    let runs = db::runs::list_job_runs(&conn, Some(&created.id), None, None, None)
+    let runs = db::runs::list_job_runs(&conn, Some(&created.id), None, None, None, None)
         .await
         .unwrap();
     assert_eq!(runs.len(), 1);
@@ -98,7 +98,7 @@ async fn t6_command_fails_status_failed() {
         .unwrap();
     assert_eq!(exit_code, 1, "Failed command should return exit code 1");
 
-    let runs = db::runs::list_job_runs(&conn, Some(&created.id), None, None, None)
+    let runs = db::runs::list_job_runs(&conn, Some(&created.id), None, None, None, None)
         .await
         .unwrap();
     assert_eq!(runs.len(), 1);
@@ -155,7 +155,7 @@ async fn t8_retry_succeeds_on_second_attempt() {
     assert_eq!(exit_code, 0, "Should succeed on retry");
 
     // Verify the run ended as success after retrying
-    let runs = db::runs::list_job_runs(&conn, Some(&created.id), None, None, None)
+    let runs = db::runs::list_job_runs(&conn, Some(&created.id), None, None, None, None)
         .await
         .unwrap();
     assert_eq!(runs.len(), 1);
@@ -192,7 +192,7 @@ async fn global_success_hooks_execute_for_task_runs() {
         .unwrap();
     assert_eq!(exit_code, 0);
 
-    let runs = db::runs::list_job_runs(&conn, Some(&created.id), None, None, None)
+    let runs = db::runs::list_job_runs(&conn, Some(&created.id), None, None, None, None)
         .await
         .unwrap();
     assert_eq!(runs.len(), 1);

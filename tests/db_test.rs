@@ -196,7 +196,7 @@ async fn t40_cascade_deletes() {
     assert!(hooks.is_empty(), "Hooks should be deleted by CASCADE");
 
     // Verify job runs are deleted
-    let runs = db::runs::list_job_runs(&conn, Some(&created_task.id), None, None, None)
+    let runs = db::runs::list_job_runs(&conn, Some(&created_task.id), None, None, None, None)
         .await
         .unwrap();
     assert!(runs.is_empty(), "Job runs should be deleted by CASCADE");
@@ -665,32 +665,32 @@ async fn run_crud_list_with_filters() {
     db::runs::create_job_run(&conn, &run).await.unwrap();
 
     // All runs
-    let all = db::runs::list_job_runs(&conn, None, None, None, None)
+    let all = db::runs::list_job_runs(&conn, None, None, None, None, None)
         .await
         .unwrap();
     assert_eq!(all.len(), 3);
 
     // Filter by task_id
-    let task1_runs = db::runs::list_job_runs(&conn, Some(&task1.id), None, None, None)
+    let task1_runs = db::runs::list_job_runs(&conn, Some(&task1.id), None, None, None, None)
         .await
         .unwrap();
     assert_eq!(task1_runs.len(), 2);
 
     // Filter by status
-    let failed_runs = db::runs::list_job_runs(&conn, None, Some("failed"), None, None)
+    let failed_runs = db::runs::list_job_runs(&conn, None, Some("failed"), None, None, None)
         .await
         .unwrap();
     assert_eq!(failed_runs.len(), 1);
 
     // Filter by both
     let task1_success =
-        db::runs::list_job_runs(&conn, Some(&task1.id), Some("success"), None, None)
+        db::runs::list_job_runs(&conn, Some(&task1.id), Some("success"), None, None, None)
             .await
             .unwrap();
     assert_eq!(task1_success.len(), 1);
 
     // Limit
-    let limited = db::runs::list_job_runs(&conn, None, None, Some(2), None)
+    let limited = db::runs::list_job_runs(&conn, None, None, None, Some(2), None)
         .await
         .unwrap();
     assert_eq!(limited.len(), 2);
@@ -698,9 +698,9 @@ async fn run_crud_list_with_filters() {
     cleanup_db(&path);
 }
 
-// Run CRUD: mark_orphaned_runs_crashed
+// Run CRUD: stuck-run listing and targeted crash marking
 #[tokio::test]
-async fn run_crud_mark_orphaned_runs_crashed() {
+async fn run_crud_stuck_runs_and_mark_crashed() {
     let (database, path) = setup_db().await;
     let conn = database.connect().await.unwrap();
 
@@ -708,7 +708,7 @@ async fn run_crud_mark_orphaned_runs_crashed() {
         .await
         .unwrap();
 
-    // Create running and retrying runs (these are "orphaned")
+    // Create running and retrying runs (sweep candidates)
     for status in [JobRunStatus::Running, JobRunStatus::Retrying] {
         let run = JobRun {
             id: String::new(),
@@ -725,7 +725,7 @@ async fn run_crud_mark_orphaned_runs_crashed() {
         db::runs::create_job_run(&conn, &run).await.unwrap();
     }
 
-    // Create a completed run (should not be affected)
+    // Create a completed run (should not be listed or affected)
     let done_run = JobRun {
         id: String::new(),
         task_id: task.id.clone(),
@@ -740,15 +740,29 @@ async fn run_crud_mark_orphaned_runs_crashed() {
     };
     db::runs::create_job_run(&conn, &done_run).await.unwrap();
 
-    // Mark orphaned
-    let count = db::runs::mark_orphaned_runs_crashed(&conn).await.unwrap();
-    assert_eq!(count, 2);
+    // Only the running/retrying runs are stuck candidates, with no pid yet.
+    let stuck = db::runs::list_stuck_run_summaries(&conn).await.unwrap();
+    assert_eq!(stuck.len(), 2);
+    assert!(stuck.iter().all(|(_, pid)| pid.is_none()));
 
-    // Verify statuses
-    let all_runs = db::runs::list_job_runs(&conn, Some(&task.id), None, None, None)
+    // Recording a runner pid surfaces it in the stuck listing.
+    let first_id = stuck[0].0.id.clone();
+    db::runs::set_runner_pid(&conn, &first_id, 4242)
         .await
         .unwrap();
+    let stuck = db::runs::list_stuck_run_summaries(&conn).await.unwrap();
+    let first = stuck.iter().find(|(run, _)| run.id == first_id).unwrap();
+    assert_eq!(first.1, Some(4242));
 
+    // Mark each stuck run crashed; the status guard makes repeats a no-op.
+    for (run, _) in &stuck {
+        assert!(db::runs::mark_run_crashed(&conn, &run.id).await.unwrap());
+        assert!(!db::runs::mark_run_crashed(&conn, &run.id).await.unwrap());
+    }
+
+    let all_runs = db::runs::list_job_runs(&conn, Some(&task.id), None, None, None, None)
+        .await
+        .unwrap();
     let crashed = all_runs
         .iter()
         .filter(|r| r.status == JobRunStatus::Crashed)
@@ -760,9 +774,10 @@ async fn run_crud_mark_orphaned_runs_crashed() {
     assert_eq!(crashed, 2, "Both running/retrying runs should be crashed");
     assert_eq!(success, 1, "Success run should be unchanged");
 
-    // Running again should not crash any more
-    let count2 = db::runs::mark_orphaned_runs_crashed(&conn).await.unwrap();
-    assert_eq!(count2, 0);
+    assert!(db::runs::list_stuck_run_summaries(&conn)
+        .await
+        .unwrap()
+        .is_empty());
 
     cleanup_db(&path);
 }
@@ -821,7 +836,7 @@ async fn prune_runs_older_than_deletes_old() {
     let deleted = db::runs::prune_runs_older_than(&conn, 30).await.unwrap();
     assert_eq!(deleted, 1);
 
-    let remaining = db::runs::list_job_runs(&conn, Some(&task.id), None, None, None)
+    let remaining = db::runs::list_job_runs(&conn, Some(&task.id), None, None, None, None)
         .await
         .unwrap();
     assert_eq!(remaining.len(), 1);
