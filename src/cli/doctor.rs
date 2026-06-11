@@ -2,7 +2,8 @@ use std::path::PathBuf;
 
 use crate::config::Config;
 use crate::db;
-use crate::systemd::unit_gen;
+use crate::sweeper;
+use crate::systemd::{unit_gen, Systemctl};
 
 /// Run diagnostics on the cron-rs installation.
 /// Checks: orphaned runs, unit file presence, binary path consistency.
@@ -18,10 +19,12 @@ pub async fn run_doctor() -> anyhow::Result<()> {
     let conn = database.connect().await?;
     println!("  Database connection: OK");
 
-    // 2. Mark orphaned runs as crashed
+    // 2. Mark orphaned runs as crashed (only when the runner is provably gone)
     println!();
     println!("Checking for orphaned runs (status=running/retrying)...");
-    let orphaned_count = db::runs::mark_orphaned_runs_crashed(&conn).await?;
+    let systemctl = Systemctl::new(&config)?;
+    let orphaned_count =
+        sweeper::sweep_once(&database, &systemctl, sweeper::SWEEP_GRACE_SECS).await?;
     if orphaned_count > 0 {
         println!("  Marked {} orphaned run(s) as crashed.", orphaned_count);
     } else {

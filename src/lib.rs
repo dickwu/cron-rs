@@ -7,4 +7,5 @@ pub mod event_poller;
 pub mod models;
 pub mod pruner;
 pub mod runner;
+pub mod sweeper;
 pub mod systemd;

@@ -7,6 +7,7 @@ mod event_poller;
 mod models;
 mod pruner;
 mod runner;
+mod sweeper;
 mod systemd;
 
 use std::sync::Arc;
@@ -46,15 +47,9 @@ async fn main() -> anyhow::Result<()> {
                 warn!("Failed to prepare cron-rs lock directory: {}", err);
             }
 
-            // Mark orphaned runs as crashed on startup
-            let conn = database.connect().await?;
-            let orphaned = db::runs::mark_orphaned_runs_crashed(&conn).await?;
-            if orphaned > 0 {
-                info!("Marked {} orphaned run(s) as crashed on startup", orphaned);
-            }
-
             // Create systemd manager
-            let systemd = systemd::Systemctl::new(&config)?;
+            let systemd: Arc<dyn systemd::SystemdManager> =
+                Arc::new(systemd::Systemctl::new(&config)?);
 
             // Real-time event bus for SSE; fed by both the in-process API
             // handlers and a poller that watches the runs/tasks tables so
@@ -65,10 +60,14 @@ async fn main() -> anyhow::Result<()> {
             event_poller::spawn(db_arc.clone(), event_bus.clone());
             pruner::spawn(db_arc.clone());
 
+            // Orphan sweep: marks runs whose runner died as crashed, once at
+            // startup and then periodically. Live runs survive daemon restarts.
+            sweeper::spawn(db_arc.clone(), systemd.clone());
+
             // Create app state
             let state = api::AppState {
                 db: db_arc,
-                systemd: Arc::new(systemd),
+                systemd,
                 config: Arc::new(config.clone()),
                 event_bus,
                 dashboard_cache: Arc::new(tokio::sync::RwLock::new(
