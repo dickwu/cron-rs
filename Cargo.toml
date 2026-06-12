@@ -1,6 +1,6 @@
 [package]
 name = "cron-rs"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
 description = "Systemd timer management platform with error hooks and observability"
 

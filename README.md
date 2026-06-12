@@ -37,6 +37,7 @@ The **daemon** exposes the API and manages systemd unit files. When a timer fire
 - **Embedded web dashboard** -- serve the management UI from the daemon on the same host/port
 - **Retry with backoff** -- configurable max retries and delay
 - **Concurrency control** -- skip, queue, or allow parallel runs
+- **Every-minute stagger** -- tasks that run every minute are automatically spread across distinct seconds so they never fire simultaneously
 - **Shared lock keys** -- optional `flock` guards for tasks that must not overlap app boot/cache generation
 - **Systemd sandbox profiles** -- optional hardening for tasks that should only write approved paths
 - **SQLite via libsql** -- zero-config embedded database
@@ -175,6 +176,28 @@ start its own timers.
 Cron lines with both day-of-month and day-of-week restrictions are skipped
 because cron treats those fields as an OR, while one systemd `OnCalendar`
 expression cannot preserve that behavior safely.
+
+## Every-Minute Task Staggering
+
+Every-minute schedules (`*-*-* *:*:00`, the `minutely` shorthand, or
+hour-restricted forms like `*-*-* 7..21:*:00`) would all fire at second 0 of
+each minute -- and systemd's default 1-minute `AccuracySec` coalesces those
+wakeups into the same instant. cron-rs prevents the pile-up automatically:
+
+- Each every-minute task gets its own second of the minute in the generated
+  `OnCalendar` (slot `i` of `n` tasks is `(2i+1)*30/n`, e.g. 8 tasks land on
+  seconds 3, 11, 18, 26, 33, 41, 48, 56). Offsets stay distinct for up to 60
+  tasks and avoid second 0, where hourly and every-N-minute timers fire.
+- Generated timers set `AccuracySec=1s` so systemd honors the offsets.
+- Slots are assigned in task-id order and disabled tasks keep theirs, so
+  enabling or disabling a task never reshuffles the others. The group is
+  respread when membership changes: task create/update/delete via API or
+  dashboard, `cron-rs import`, and `cron-rs regenerate`.
+
+The schedule stored in the database is untouched -- staggering only affects
+the rendered unit files. On an existing install, run `cron-rs regenerate`
+once to apply offsets to already-installed timers (it restarts active
+cron-rs timers so the new schedules take effect immediately).
 
 ## PHP/Hyperf Integration Notes
 
