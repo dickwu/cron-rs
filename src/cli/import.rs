@@ -100,7 +100,10 @@ pub async fn run_import(options: ImportOptions) -> anyhow::Result<()> {
         match db::tasks::create(&conn, &task).await {
             Ok(created) => {
                 if let Some(systemd) = &systemd {
-                    if let Err(err) = systemd.install_task(&created).await {
+                    // Every-minute tasks get their stagger second in the
+                    // group respread after the loop, once the final task
+                    // set is known.
+                    if let Err(err) = systemd.install_task(&created, None).await {
                         summary.failed += 1;
                         eprintln!(
                             "Imported '{}' but failed to install cron-rs timer: {}",
@@ -120,6 +123,24 @@ pub async fn run_import(options: ImportOptions) -> anyhow::Result<()> {
             Err(err) => {
                 summary.failed += 1;
                 eprintln!("Failed to import '{}': {}", candidate.name, err);
+            }
+        }
+    }
+
+    // Imports can grow the every-minute group; reinstall its enabled members
+    // so their stagger seconds stay evenly spread.
+    if let Some(systemd) = &systemd {
+        let tasks = db::tasks::list(&conn).await?;
+        let assignments = crate::systemd::unit_gen::stagger_assignments(&tasks);
+        for task in &tasks {
+            let Some(second) = assignments.get(&task.id).copied() else {
+                continue;
+            };
+            if !task.enabled {
+                continue;
+            }
+            if let Err(err) = systemd.install_task(task, Some(second)).await {
+                eprintln!("Failed to restagger timer for '{}': {}", task.name, err);
             }
         }
     }

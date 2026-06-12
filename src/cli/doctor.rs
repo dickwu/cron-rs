@@ -254,8 +254,13 @@ pub async fn run_regenerate(rewrite_all: bool) -> anyhow::Result<()> {
         unit_gen::ensure_lock_dir()?;
     }
 
+    // Spread every-minute tasks across distinct seconds so they never fire
+    // simultaneously.
+    let stagger = unit_gen::stagger_assignments(&tasks);
+
     for task in &tasks {
-        let timer_content = unit_gen::generate_timer(&task.name, &task.schedule);
+        let timer_content =
+            unit_gen::generate_timer(&task.name, &task.schedule, stagger.get(&task.id).copied());
         let service_content =
             unit_gen::generate_service_for_task(task, &current_binary, &db_path_str);
 
@@ -287,6 +292,30 @@ pub async fn run_regenerate(rewrite_all: bool) -> anyhow::Result<()> {
         Ok(o) => {
             let stderr = String::from_utf8_lossy(&o.stderr);
             eprintln!("  WARNING: daemon-reload failed: {}", stderr.trim());
+        }
+        Err(e) => {
+            eprintln!("  WARNING: Could not run systemctl: {}", e);
+        }
+    }
+
+    // daemon-reload alone does not make an active timer recompute its next
+    // elapse from a rewritten OnCalendar; restart the active cron-rs timers
+    // so regenerated schedules (e.g. stagger seconds) take effect now.
+    // try-restart leaves disabled/stopped timers alone.
+    println!("Restarting active cron-rs timers...");
+    let output = std::process::Command::new("systemctl")
+        .arg("--user")
+        .arg("try-restart")
+        .arg("cron-rs-*.timer")
+        .output();
+
+    match output {
+        Ok(o) if o.status.success() => {
+            println!("  try-restart: OK");
+        }
+        Ok(o) => {
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            eprintln!("  WARNING: timer restart failed: {}", stderr.trim());
         }
         Err(e) => {
             eprintln!("  WARNING: Could not run systemctl: {}", e);

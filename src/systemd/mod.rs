@@ -8,16 +8,17 @@ use crate::models::Task;
 /// Trait for systemd operations. Allows mocking in tests.
 #[async_trait::async_trait]
 pub trait SystemdManager: Send + Sync {
-    /// Install a task: generate timer + service files, reload daemon, enable & start timer.
-    async fn install_task(&self, task: &Task) -> anyhow::Result<()>;
+    /// Install a task: generate timer + service files, reload daemon, enable &
+    /// (re)start timer. `stagger_second` (see [`unit_gen::stagger_assignments`])
+    /// shifts an every-minute schedule onto its own second so such tasks never
+    /// fire simultaneously.
+    async fn install_task(&self, task: &Task, stagger_second: Option<u8>) -> anyhow::Result<()>;
     /// Remove a task: stop & disable timer, delete unit files, reload daemon.
     async fn remove_task(&self, task_name: &str) -> anyhow::Result<()>;
     /// Enable the timer unit for the given task.
     async fn enable_timer(&self, task_name: &str) -> anyhow::Result<()>;
     /// Disable the timer unit for the given task.
     async fn disable_timer(&self, task_name: &str) -> anyhow::Result<()>;
-    /// Start the timer unit for the given task.
-    async fn start_timer(&self, task_name: &str) -> anyhow::Result<()>;
     /// Stop the timer unit for the given task.
     async fn stop_timer(&self, task_name: &str) -> anyhow::Result<()>;
     /// Reload the systemd daemon to pick up unit file changes.

@@ -24,7 +24,7 @@ impl StubSystemd {
 
 #[async_trait::async_trait]
 impl SystemdManager for StubSystemd {
-    async fn install_task(&self, _task: &Task) -> anyhow::Result<()> {
+    async fn install_task(&self, _task: &Task, _stagger_second: Option<u8>) -> anyhow::Result<()> {
         Ok(())
     }
     async fn remove_task(&self, _task_name: &str) -> anyhow::Result<()> {
@@ -34,9 +34,6 @@ impl SystemdManager for StubSystemd {
         Ok(())
     }
     async fn disable_timer(&self, _task_name: &str) -> anyhow::Result<()> {
-        Ok(())
-    }
-    async fn start_timer(&self, _task_name: &str) -> anyhow::Result<()> {
         Ok(())
     }
     async fn stop_timer(&self, _task_name: &str) -> anyhow::Result<()> {

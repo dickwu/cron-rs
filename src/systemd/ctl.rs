@@ -132,13 +132,13 @@ impl Systemctl {
 
 #[async_trait::async_trait]
 impl SystemdManager for Systemctl {
-    async fn install_task(&self, task: &Task) -> Result<()> {
+    async fn install_task(&self, task: &Task, stagger_second: Option<u8>) -> Result<()> {
         if task.lock_key.is_some() || task.sandbox_profile.is_some() {
             unit_gen::ensure_lock_dir().context("failed to prepare cron-rs lock directory")?;
         }
 
         // Generate unit file contents.
-        let timer_content = unit_gen::generate_timer(&task.name, &task.schedule);
+        let timer_content = unit_gen::generate_timer(&task.name, &task.schedule, stagger_second);
         let service_content = unit_gen::generate_service_for_task(
             task,
             &self.binary_path.to_string_lossy(),
@@ -166,10 +166,14 @@ impl SystemdManager for Systemctl {
             })?;
         info!("wrote service unit: {}", service_path.display());
 
-        // Reload daemon to pick up new files, then enable and start the timer.
+        // Reload daemon to pick up new files, then enable and restart the
+        // timer. Restart (not start) so an already-active timer recomputes
+        // its next elapse from a rewritten OnCalendar, e.g. after the
+        // every-minute stagger offsets are respread.
         self.daemon_reload().await?;
         self.enable_timer(&task.name).await?;
-        self.start_timer(&task.name).await?;
+        let timer = unit_gen::timer_filename(&task.name);
+        self.run_systemctl(&["restart", &timer]).await?;
 
         info!("installed and started timer for task '{}'", task.name);
         Ok(())
@@ -216,12 +220,6 @@ impl SystemdManager for Systemctl {
     async fn disable_timer(&self, task_name: &str) -> Result<()> {
         let timer = unit_gen::timer_filename(task_name);
         self.run_systemctl(&["disable", &timer]).await?;
-        Ok(())
-    }
-
-    async fn start_timer(&self, task_name: &str) -> Result<()> {
-        let timer = unit_gen::timer_filename(task_name);
-        self.run_systemctl(&["start", &timer]).await?;
         Ok(())
     }
 

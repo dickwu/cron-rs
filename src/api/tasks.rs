@@ -214,6 +214,63 @@ fn parse_optional_string_update(
 
 // --- Handlers ---
 
+/// Compute the stagger second for one task from the full task set, so
+/// every-minute tasks land on distinct seconds. None for other schedules
+/// (or when the task list cannot be read — installing unstaggered beats
+/// not installing at all).
+async fn stagger_second_for_task(state: &AppState, task_id: &str) -> Option<u8> {
+    let conn = match state.db.connect().await {
+        Ok(c) => c,
+        Err(e) => {
+            error!("Failed to connect to DB for stagger computation: {}", e);
+            return None;
+        }
+    };
+    match db::tasks::list(&conn).await {
+        Ok(tasks) => unit_gen::stagger_second_for(&tasks, task_id),
+        Err(e) => {
+            error!("Failed to list tasks for stagger computation: {}", e);
+            None
+        }
+    }
+}
+
+/// Reinstall every enabled every-minute task so the group's second offsets
+/// stay evenly spread after its membership changes (task created, deleted,
+/// or schedule moved in/out of the every-minute group). Errors are logged
+/// per task, matching how single-task install failures are handled.
+async fn resync_every_minute_timers(state: &AppState) {
+    let conn = match state.db.connect().await {
+        Ok(c) => c,
+        Err(e) => {
+            error!("Failed to connect to DB for every-minute resync: {}", e);
+            return;
+        }
+    };
+    let tasks = match db::tasks::list(&conn).await {
+        Ok(t) => t,
+        Err(e) => {
+            error!("Failed to list tasks for every-minute resync: {}", e);
+            return;
+        }
+    };
+    let assignments = unit_gen::stagger_assignments(&tasks);
+    for task in &tasks {
+        let Some(second) = assignments.get(&task.id).copied() else {
+            continue;
+        };
+        if !task.enabled {
+            continue;
+        }
+        if let Err(e) = state.systemd.install_task(task, Some(second)).await {
+            error!(
+                "Failed to restagger systemd timer for task '{}': {}",
+                task.name, e
+            );
+        }
+    }
+}
+
 /// GET /api/v1/tasks
 pub async fn list_tasks(State(state): State<AppState>) -> impl IntoResponse {
     let conn = match state.db.connect().await {
@@ -303,9 +360,13 @@ pub async fn create_task(
         }
     };
 
-    // Install systemd units if the task is enabled
-    if created.enabled {
-        if let Err(e) = state.systemd.install_task(&created).await {
+    // Install systemd units if the task is enabled. A new every-minute task
+    // changes the group's stagger spread, so reinstall the whole group (the
+    // new task included); other tasks install standalone.
+    if unit_gen::is_every_minute_schedule(&created.schedule) {
+        resync_every_minute_timers(&state).await;
+    } else if created.enabled {
+        if let Err(e) = state.systemd.install_task(&created, None).await {
             error!(
                 "Failed to install systemd units for task '{}': {}",
                 created.name, e
@@ -453,6 +514,8 @@ pub async fn update_task(
         None => existing.concurrency_policy.clone(),
     };
 
+    let was_every_minute = unit_gen::is_every_minute_schedule(&existing.schedule);
+
     let updated_task = Task {
         id: existing.id.clone(),
         name: body.name.unwrap_or(existing.name.clone()),
@@ -498,15 +561,23 @@ pub async fn update_task(
     };
 
     // Reinstall systemd units if the task is enabled
+    let group_membership_changed =
+        was_every_minute != unit_gen::is_every_minute_schedule(&saved.schedule);
     if saved.enabled {
         // Remove old units (using old name if name changed)
         let _ = state.systemd.remove_task(&existing.name).await;
-        if let Err(e) = state.systemd.install_task(&saved).await {
+        let stagger = stagger_second_for_task(&state, &saved.id).await;
+        if let Err(e) = state.systemd.install_task(&saved, stagger).await {
             error!(
                 "Failed to reinstall systemd units for task '{}': {}",
                 saved.name, e
             );
         }
+    }
+    // A schedule moving in or out of the every-minute group changes every
+    // member's stagger offset; respread them.
+    if group_membership_changed {
+        resync_every_minute_timers(&state).await;
     }
 
     info!("Updated task '{}' (id: {})", saved.name, saved.id);
@@ -550,6 +621,10 @@ pub async fn delete_task(
     // Delete from DB
     match db::tasks::delete(&conn, &id).await {
         Ok(()) => {
+            // Removing an every-minute member changes the group's spread.
+            if unit_gen::is_every_minute_schedule(&task.schedule) {
+                resync_every_minute_timers(&state).await;
+            }
             info!("Deleted task '{}' (id: {})", task.name, id);
             StatusCode::NO_CONTENT.into_response()
         }
@@ -594,8 +669,10 @@ pub async fn enable_task(
         }
     };
 
-    // Install and enable systemd timer
-    if let Err(e) = state.systemd.install_task(&saved).await {
+    // Install and enable systemd timer. Disabled tasks keep their stagger
+    // slot, so enabling never reshuffles the other every-minute timers.
+    let stagger = stagger_second_for_task(&state, &saved.id).await;
+    if let Err(e) = state.systemd.install_task(&saved, stagger).await {
         error!(
             "Failed to enable systemd timer for task '{}': {}",
             saved.name, e

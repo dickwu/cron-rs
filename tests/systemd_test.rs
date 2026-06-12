@@ -26,7 +26,7 @@ fn make_test_task(name: &str, schedule: &str) -> Task {
 #[test]
 fn t15_timer_has_correct_on_calendar() {
     let task = make_test_task("backup", "*-*-* 02:00:00");
-    let content = unit_gen::generate_timer_unit(&task);
+    let content = unit_gen::generate_timer_unit(&task, None);
 
     assert!(
         content.contains("OnCalendar=*-*-* 02:00:00"),
@@ -54,13 +54,20 @@ fn t15_timer_has_correct_on_calendar() {
 // Test with various schedule expressions
 #[test]
 fn timer_with_minutely_schedule() {
-    let content = unit_gen::generate_timer("minutely-task", "*-*-* *:*:00");
+    let content = unit_gen::generate_timer("minutely-task", "*-*-* *:*:00", None);
     assert!(content.contains("OnCalendar=*-*-* *:*:00"));
 }
 
 #[test]
+fn timer_with_minutely_schedule_staggered() {
+    let content = unit_gen::generate_timer("minutely-task", "*-*-* *:*:00", Some(41));
+    assert!(content.contains("OnCalendar=*-*-* *:*:41"));
+    assert!(content.contains("AccuracySec=1s"));
+}
+
+#[test]
 fn timer_with_daily_schedule() {
-    let content = unit_gen::generate_timer("daily-task", "*-*-* 00:00:00");
+    let content = unit_gen::generate_timer("daily-task", "*-*-* 00:00:00", None);
     assert!(content.contains("OnCalendar=*-*-* 00:00:00"));
 }
 
@@ -152,7 +159,7 @@ fn service_filename_format() {
 // Timer description includes task name
 #[test]
 fn timer_description_includes_task_name() {
-    let content = unit_gen::generate_timer("my-backup", "*-*-* 02:00:00");
+    let content = unit_gen::generate_timer("my-backup", "*-*-* 02:00:00", None);
     assert!(content.contains("Description=cron-rs timer: my-backup"));
 }
 

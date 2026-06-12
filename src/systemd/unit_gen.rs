@@ -1,4 +1,5 @@
 use crate::models::Task;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// Sanitize a task name into a valid systemd unit name component.
@@ -115,10 +116,98 @@ fn sandbox_profile_content(profile: &str, db_path: &str) -> Option<String> {
     }
 }
 
+/// Split the single `H:M[:S]` token of a calendar expression into components.
+/// Returns None when there is no time token, more than one, or it has more
+/// than three `:`-separated parts — callers should then leave the schedule
+/// alone rather than guess.
+fn time_parts(schedule: &str) -> Option<(&str, &str, Option<&str>)> {
+    let mut time_tokens = schedule.split_whitespace().filter(|t| t.contains(':'));
+    let token = time_tokens.next()?;
+    if time_tokens.next().is_some() {
+        return None;
+    }
+    let mut parts = token.split(':');
+    let hour = parts.next()?;
+    let minute = parts.next()?;
+    let second = parts.next();
+    if parts.next().is_some() {
+        return None;
+    }
+    Some((hour, minute, second))
+}
+
+/// True when a schedule fires every minute at second zero: the `minutely`
+/// shorthand, or a calendar expression whose minute component is `*` and
+/// whose seconds component is absent or zero. These are the timers that all
+/// collide at :00 of every minute unless staggered.
+pub fn is_every_minute_schedule(schedule: &str) -> bool {
+    let schedule = schedule.trim();
+    if schedule.eq_ignore_ascii_case("minutely") {
+        return true;
+    }
+    match time_parts(schedule) {
+        Some((_, minute, second)) => {
+            minute == "*" && second.is_none_or(|s| !s.is_empty() && s.chars().all(|c| c == '0'))
+        }
+        None => false,
+    }
+}
+
+/// Rewrite an every-minute schedule so it fires at `second` instead of `:00`.
+/// Schedules that do not fire every minute are returned unchanged.
+pub fn apply_stagger_second(schedule: &str, second: u8) -> String {
+    if !is_every_minute_schedule(schedule) {
+        return schedule.to_string();
+    }
+    let trimmed = schedule.trim();
+    if trimmed.eq_ignore_ascii_case("minutely") {
+        return format!("*-*-* *:*:{:02}", second);
+    }
+    let tokens: Vec<String> = trimmed
+        .split_whitespace()
+        .map(|token| {
+            if !token.contains(':') {
+                return token.to_string();
+            }
+            // is_every_minute_schedule guaranteed exactly one time token
+            // with two or three components.
+            let parts: Vec<&str> = token.split(':').collect();
+            format!("{}:{}:{:02}", parts[0], parts[1], second)
+        })
+        .collect();
+    tokens.join(" ")
+}
+
+/// Evenly-spread stagger seconds for every-minute tasks, keyed by task id.
+///
+/// Slot `i` of `n` is `(2i+1)*30/n`: slots are centered within the minute so
+/// no task lands on second 0 (where hourly and every-N-minute timers fire)
+/// while staying distinct for up to 60 tasks. Assignment is ordered by task
+/// id, and disabled tasks keep their slot, so a task's offset only moves when
+/// the every-minute group itself gains or loses a member.
+pub fn stagger_assignments(tasks: &[Task]) -> HashMap<String, u8> {
+    let mut ids: Vec<&str> = tasks
+        .iter()
+        .filter(|t| is_every_minute_schedule(&t.schedule))
+        .map(|t| t.id.as_str())
+        .collect();
+    ids.sort_unstable();
+    let n = ids.len();
+    ids.into_iter()
+        .enumerate()
+        .map(|(i, id)| (id.to_string(), (((2 * i + 1) * 30 / n).min(59)) as u8))
+        .collect()
+}
+
+/// Stagger second for one task, when it is an every-minute task.
+pub fn stagger_second_for(tasks: &[Task], task_id: &str) -> Option<u8> {
+    stagger_assignments(tasks).get(task_id).copied()
+}
+
 /// Generate the content of a systemd .timer unit file for the given task.
 #[allow(dead_code)]
-pub fn generate_timer_unit(task: &Task) -> String {
-    generate_timer(&task.name, &task.schedule)
+pub fn generate_timer_unit(task: &Task, stagger_second: Option<u8>) -> String {
+    generate_timer(&task.name, &task.schedule, stagger_second)
 }
 
 /// Generate the content of a systemd .service unit file for the given task.
@@ -162,14 +251,24 @@ fn apply_timezone(schedule: &str) -> String {
 }
 
 /// Generate a .timer unit file content from raw parameters.
-pub fn generate_timer(task_name: &str, schedule: &str) -> String {
-    let schedule = apply_timezone(schedule);
+///
+/// `stagger_second` (from [`stagger_assignments`]) shifts an every-minute
+/// schedule onto its own second. `AccuracySec=1s` is required for the shift
+/// to matter: systemd's default 1-minute accuracy window coalesces timer
+/// wakeups, which is exactly what makes co-scheduled tasks fire together.
+pub fn generate_timer(task_name: &str, schedule: &str, stagger_second: Option<u8>) -> String {
+    let schedule = match stagger_second {
+        Some(second) => apply_stagger_second(schedule, second),
+        None => schedule.to_string(),
+    };
+    let schedule = apply_timezone(&schedule);
     format!(
         "[Unit]\n\
          Description=cron-rs timer: {task_name}\n\
          \n\
          [Timer]\n\
          OnCalendar={schedule}\n\
+         AccuracySec=1s\n\
          Persistent=true\n\
          \n\
          [Install]\n\
@@ -309,11 +408,115 @@ mod tests {
 
     #[test]
     fn test_generate_timer() {
-        let content = generate_timer("backup", "*-*-* 02:00:00");
+        let content = generate_timer("backup", "*-*-* 02:00:00", None);
         assert!(content.contains("Description=cron-rs timer: backup"));
         assert!(content.contains("OnCalendar=*-*-* 02:00:00"));
+        assert!(content.contains("AccuracySec=1s"));
         assert!(content.contains("Persistent=true"));
         assert!(content.contains("WantedBy=timers.target"));
+    }
+
+    #[test]
+    fn test_generate_timer_staggers_every_minute_schedule() {
+        let content = generate_timer("sync", "*-*-* *:*:00", Some(26));
+        assert!(content.contains("OnCalendar=*-*-* *:*:26"));
+        assert!(content.contains("AccuracySec=1s"));
+    }
+
+    #[test]
+    fn test_generate_timer_ignores_stagger_for_other_schedules() {
+        let content = generate_timer("backup", "*-*-* 02:00:00", Some(26));
+        assert!(content.contains("OnCalendar=*-*-* 02:00:00"));
+    }
+
+    #[test]
+    fn test_is_every_minute_schedule() {
+        assert!(is_every_minute_schedule("*-*-* *:*:00"));
+        assert!(is_every_minute_schedule("minutely"));
+        assert!(is_every_minute_schedule("Minutely"));
+        assert!(is_every_minute_schedule("*:*"));
+        assert!(is_every_minute_schedule("*:*:00"));
+        assert!(is_every_minute_schedule("*-*-* 9..17:*:00"));
+        assert!(is_every_minute_schedule("*-*-* *:*:00 Asia/Shanghai"));
+
+        assert!(!is_every_minute_schedule("*-*-* *:0/5:00"));
+        assert!(!is_every_minute_schedule("*-*-* 02:00:00"));
+        assert!(!is_every_minute_schedule("*-*-* *:*:30"));
+        assert!(!is_every_minute_schedule("*-*-* *:*:0/15"));
+        assert!(!is_every_minute_schedule("hourly"));
+        assert!(!is_every_minute_schedule("daily"));
+        assert!(!is_every_minute_schedule(""));
+    }
+
+    #[test]
+    fn test_apply_stagger_second() {
+        assert_eq!(apply_stagger_second("*-*-* *:*:00", 26), "*-*-* *:*:26");
+        assert_eq!(apply_stagger_second("minutely", 5), "*-*-* *:*:05");
+        assert_eq!(apply_stagger_second("*:*", 7), "*:*:07");
+        assert_eq!(
+            apply_stagger_second("*-*-* *:*:00 Asia/Shanghai", 56),
+            "*-*-* *:*:56 Asia/Shanghai"
+        );
+        // Non-every-minute schedules are untouched.
+        assert_eq!(apply_stagger_second("*-*-* 02:00:00", 9), "*-*-* 02:00:00");
+        assert_eq!(apply_stagger_second("*-*-* *:0/5:00", 9), "*-*-* *:0/5:00");
+    }
+
+    fn stagger_task(id: &str, schedule: &str, enabled: bool) -> Task {
+        use crate::models::task::ConcurrencyPolicy;
+        Task {
+            id: id.to_string(),
+            name: format!("task-{id}"),
+            command: "true".to_string(),
+            schedule: schedule.to_string(),
+            tags: Vec::new(),
+            description: String::new(),
+            enabled,
+            max_retries: 0,
+            retry_delay_secs: 5,
+            timeout_secs: None,
+            concurrency_policy: ConcurrencyPolicy::Skip,
+            lock_key: None,
+            sandbox_profile: None,
+            created_at: String::new(),
+            updated_at: String::new(),
+        }
+    }
+
+    #[test]
+    fn test_stagger_assignments_spread_and_membership() {
+        let tasks = vec![
+            stagger_task("a", "*-*-* *:*:00", true),
+            stagger_task("b", "*-*-* *:*:00", false), // disabled still holds a slot
+            stagger_task("c", "minutely", true),
+            stagger_task("d", "*-*-* 02:00:00", true), // not every-minute
+        ];
+        let map = stagger_assignments(&tasks);
+        assert_eq!(map.len(), 3);
+        assert!(!map.contains_key("d"));
+        // Three members, ordered by id: (2i+1)*30/3 = 10, 30, 50.
+        assert_eq!(map["a"], 10);
+        assert_eq!(map["b"], 30);
+        assert_eq!(map["c"], 50);
+
+        assert_eq!(stagger_second_for(&tasks, "c"), Some(50));
+        assert_eq!(stagger_second_for(&tasks, "d"), None);
+        assert_eq!(stagger_second_for(&tasks, "missing"), None);
+    }
+
+    #[test]
+    fn test_stagger_assignments_distinct_up_to_sixty_tasks() {
+        for n in 1..=60 {
+            let tasks: Vec<Task> = (0..n)
+                .map(|i| stagger_task(&format!("id-{i:03}"), "*-*-* *:*:00", true))
+                .collect();
+            let map = stagger_assignments(&tasks);
+            let mut seconds: Vec<u8> = map.values().copied().collect();
+            seconds.sort_unstable();
+            seconds.dedup();
+            assert_eq!(seconds.len(), n, "collision with {n} every-minute tasks");
+            assert!(seconds.iter().all(|s| *s < 60));
+        }
     }
 
     #[test]

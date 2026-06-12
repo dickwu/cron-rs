@@ -42,11 +42,14 @@ impl MockSystemdManager {
 
 #[async_trait::async_trait]
 impl SystemdManager for MockSystemdManager {
-    async fn install_task(&self, task: &Task) -> anyhow::Result<()> {
+    async fn install_task(&self, task: &Task, stagger_second: Option<u8>) -> anyhow::Result<()> {
+        let suffix = stagger_second
+            .map(|s| format!("@{}", s))
+            .unwrap_or_default();
         self.calls
             .lock()
             .unwrap()
-            .push(format!("install_task:{}", task.name));
+            .push(format!("install_task:{}{}", task.name, suffix));
         Ok(())
     }
 
@@ -71,14 +74,6 @@ impl SystemdManager for MockSystemdManager {
             .lock()
             .unwrap()
             .push(format!("disable_timer:{}", task_name));
-        Ok(())
-    }
-
-    async fn start_timer(&self, task_name: &str) -> anyhow::Result<()> {
-        self.calls
-            .lock()
-            .unwrap()
-            .push(format!("start_timer:{}", task_name));
         Ok(())
     }
 
@@ -1523,6 +1518,77 @@ async fn dashboard_task_activity_returns_per_task_daily_rows() {
         .find(|r| r["task_id"] == task_b.as_str())
         .expect("row for task b");
     assert_eq!(row_b["counts"]["failed"], 1);
+
+    cleanup_db(&path);
+}
+
+// Every-minute tasks must never fire on the same second: each create
+// respreads the group across distinct stagger seconds, and other schedules
+// stay unstaggered.
+#[tokio::test]
+async fn every_minute_tasks_get_distinct_stagger_seconds() {
+    let (app, path, mock) = setup_app().await;
+    let token = login(&app).await;
+
+    let create = |name: &str, schedule: &str| {
+        let body = serde_json::json!({
+            "name": name,
+            "command": "echo hi",
+            "schedule": schedule,
+        });
+        let request = Request::builder()
+            .method(http::Method::POST)
+            .uri("/api/v1/tasks")
+            .header(http::header::CONTENT_TYPE, "application/json")
+            .header(http::header::AUTHORIZATION, auth_header(&token))
+            .body(Body::from(serde_json::to_string(&body).unwrap()))
+            .unwrap();
+        app.clone().oneshot(request)
+    };
+
+    // A lone every-minute task sits in the middle of the minute: (2*0+1)*30/1.
+    let response = create("em-a", "*-*-* *:*:00").await.unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    assert!(
+        mock.get_calls()
+            .contains(&"install_task:em-a@30".to_string()),
+        "single every-minute task should land on second 30. Calls: {:?}",
+        mock.get_calls()
+    );
+
+    // A second member respreads the group to seconds 15 and 45 (id order
+    // decides which task gets which slot).
+    let response = create("em-b", "minutely").await.unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    // An hourly task is never staggered.
+    let response = create("hourly-c", "*-*-* *:00:00").await.unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let calls = mock.get_calls();
+    let last_stagger = |name: &str| -> Option<u8> {
+        let prefix = format!("install_task:{}@", name);
+        calls
+            .iter()
+            .rev()
+            .find_map(|c| c.strip_prefix(&prefix))
+            .map(|s| s.parse().unwrap())
+    };
+
+    let second_a = last_stagger("em-a").expect("em-a should be staggered");
+    let second_b = last_stagger("em-b").expect("em-b should be staggered");
+    assert_ne!(
+        second_a, second_b,
+        "every-minute tasks must not share a second"
+    );
+    let mut seconds = [second_a, second_b];
+    seconds.sort_unstable();
+    assert_eq!(seconds, [15, 45], "two tasks should be evenly spread");
+    assert!(
+        calls.contains(&"install_task:hourly-c".to_string()),
+        "hourly task should install without a stagger second. Calls: {:?}",
+        calls
+    );
 
     cleanup_db(&path);
 }
