@@ -72,9 +72,7 @@ pub async fn run_init(options: InitOptions) -> anyhow::Result<()> {
         .to_string();
 
     // Generate random JWT secret (32 bytes hex)
-    let mut jwt_bytes = [0u8; 32];
-    use rand::RngCore;
-    rand::thread_rng().fill_bytes(&mut jwt_bytes);
+    let jwt_bytes: [u8; 32] = rand::random();
     let jwt_secret = hex::encode(jwt_bytes);
 
     // Ensure config directory exists
