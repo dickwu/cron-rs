@@ -111,9 +111,10 @@ async fn t6_command_fails_status_failed() {
 // T10: stdout/stderr captured correctly
 #[tokio::test]
 async fn t10_stdout_stderr_captured() {
-    let result = executor::execute_command("echo stdout_content; echo stderr_content >&2", None)
-        .await
-        .unwrap();
+    let result =
+        executor::execute_command("echo stdout_content; echo stderr_content >&2", None, None)
+            .await
+            .unwrap();
 
     assert_eq!(result.exit_code, 0);
     assert!(
@@ -249,7 +250,7 @@ fn test_retry_delay_minimum_base() {
 // Test executor: command timeout
 #[tokio::test]
 async fn test_executor_command_timeout() {
-    let result = executor::execute_command("sleep 60", Some(1))
+    let result = executor::execute_command("sleep 60", Some(1), None)
         .await
         .unwrap();
 
@@ -260,7 +261,7 @@ async fn test_executor_command_timeout() {
 // Test executor: successful command
 #[tokio::test]
 async fn test_executor_successful_command() {
-    let result = executor::execute_command("echo test_output", None)
+    let result = executor::execute_command("echo test_output", None, None)
         .await
         .unwrap();
 
@@ -273,8 +274,160 @@ async fn test_executor_successful_command() {
 // Test executor: failing command
 #[tokio::test]
 async fn test_executor_failing_command() {
-    let result = executor::execute_command("exit 42", None).await.unwrap();
+    let result = executor::execute_command("exit 42", None, None)
+        .await
+        .unwrap();
 
     assert_eq!(result.exit_code, 42);
     assert!(!result.timed_out);
+}
+
+// Executor streams partial output via the progress channel while the command
+// is still running, not only once it finishes.
+#[tokio::test]
+async fn test_executor_streams_progress() {
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<executor::ProgressSnapshot>(16);
+
+    // START is printed immediately; END only after a 2s sleep. The ~1s tailer
+    // tick must flush a snapshot containing START (but not yet END) mid-run.
+    let handle = tokio::spawn(async move {
+        executor::execute_command("echo START; sleep 2; echo END", None, Some(tx)).await
+    });
+
+    let mut snapshots = Vec::new();
+    while let Some(snap) = rx.recv().await {
+        snapshots.push(snap);
+    }
+
+    let result = handle.await.unwrap().unwrap();
+    assert_eq!(result.exit_code, 0);
+    assert!(
+        result.stdout.contains("START") && result.stdout.contains("END"),
+        "final output should be complete, got: {:?}",
+        result.stdout
+    );
+
+    assert!(
+        !snapshots.is_empty(),
+        "expected at least one mid-run progress snapshot"
+    );
+    assert!(
+        snapshots
+            .iter()
+            .any(|(out, _)| out.contains("START") && !out.contains("END")),
+        "expected an intermediate snapshot before completion, got: {snapshots:?}"
+    );
+}
+
+// Partial-output flushes persist for a running run, but are a no-op once the
+// run is finalized — so a late flush can never truncate the final output.
+#[tokio::test]
+async fn test_update_job_run_output_guarded_by_status() {
+    let (database, path) = setup_db().await;
+    let conn = database.connect().await.unwrap();
+
+    let task = make_test_task("stream-task", "true");
+    let created = db::tasks::create(&conn, &task).await.unwrap();
+
+    let mut run = JobRun {
+        id: String::new(),
+        task_id: created.id.clone(),
+        started_at: String::new(),
+        finished_at: None,
+        exit_code: None,
+        stdout: String::new(),
+        stderr: String::new(),
+        status: JobRunStatus::Running,
+        attempt: 1,
+        duration_ms: None,
+    };
+    run = db::runs::create_job_run(&conn, &run).await.unwrap();
+
+    // While running, partial output is persisted.
+    db::runs::update_job_run_output(&conn, &run.id, "partial out", "partial err")
+        .await
+        .unwrap();
+    let fetched = db::runs::get_job_run_by_id(&conn, &run.id).await.unwrap();
+    assert_eq!(fetched.stdout, "partial out");
+    assert_eq!(fetched.stderr, "partial err");
+
+    // Finalize the run with its authoritative output.
+    run.status = JobRunStatus::Success;
+    run.stdout = "final out".to_string();
+    run.stderr = "final err".to_string();
+    run.exit_code = Some(0);
+    run.finished_at = Some("2026-01-01T00:00:00Z".to_string());
+    db::runs::update_job_run(&conn, &run).await.unwrap();
+
+    // A flush arriving after finalization must not change anything.
+    db::runs::update_job_run_output(&conn, &run.id, "stale out", "stale err")
+        .await
+        .unwrap();
+    let after = db::runs::get_job_run_by_id(&conn, &run.id).await.unwrap();
+    assert_eq!(
+        after.stdout, "final out",
+        "a late flush must not truncate the final output"
+    );
+    assert_eq!(after.stderr, "final err");
+    assert_eq!(after.status, JobRunStatus::Success);
+
+    cleanup_db(&path);
+}
+
+// Full runner path: partial output is visible in the DB while the run is still
+// in flight (drives the dashboard's live terminal), and the final write is
+// complete once it finishes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_run_task_persists_partial_output_while_running() {
+    let (database, path) = setup_db().await;
+    let conn = database.connect().await.unwrap();
+
+    // START prints immediately; END only after a 3s sleep.
+    let task = make_test_task("live-task", "echo START; sleep 3; echo END");
+    let created = db::tasks::create(&conn, &task).await.unwrap();
+
+    let db_path_str = path.to_str().unwrap().to_string();
+    let run_handle = {
+        let id = created.id.clone();
+        let name = created.name.clone();
+        tokio::spawn(async move { runner::run_task(&id, &name, &db_path_str).await })
+    };
+
+    // After the run starts and the ~1s tailer flushes — but before END at ~3s —
+    // the DB row should already carry the partial output.
+    tokio::time::sleep(std::time::Duration::from_millis(1800)).await;
+    let mid = db::runs::list_job_runs(&conn, Some(&created.id), None, None, None, None)
+        .await
+        .unwrap();
+    assert_eq!(mid.len(), 1, "run row should exist while running");
+    assert_eq!(
+        mid[0].status,
+        JobRunStatus::Running,
+        "run should still be in flight"
+    );
+    assert!(
+        mid[0].stdout.contains("START"),
+        "partial output should be visible mid-run, got: {:?}",
+        mid[0].stdout
+    );
+    assert!(
+        !mid[0].stdout.contains("END"),
+        "END must not appear before the command finishes, got: {:?}",
+        mid[0].stdout
+    );
+
+    // Let it finish and confirm the authoritative final output landed.
+    let exit = run_handle.await.unwrap().unwrap();
+    assert_eq!(exit, 0);
+    let done = db::runs::get_job_run_by_id(&conn, &mid[0].id)
+        .await
+        .unwrap();
+    assert_eq!(done.status, JobRunStatus::Success);
+    assert!(
+        done.stdout.contains("START") && done.stdout.contains("END"),
+        "final output should be complete, got: {:?}",
+        done.stdout
+    );
+
+    cleanup_db(&path);
 }

@@ -199,6 +199,28 @@ pub async fn update_job_run(conn: &Connection, run: &JobRun) -> Result<(), DbErr
     Ok(())
 }
 
+/// Update only the captured output of an in-flight run, so the dashboard can
+/// stream stdout/stderr live instead of seeing it only when the run finishes.
+///
+/// Guarded on status: once the runner writes the terminal status via
+/// [`update_job_run`], a late progress flush matches no rows and is a harmless
+/// no-op — it can never resurrect or truncate the authoritative final output.
+/// `retrying` is included so output keeps flowing across retry attempts.
+pub async fn update_job_run_output(
+    conn: &Connection,
+    id: &str,
+    stdout: &str,
+    stderr: &str,
+) -> Result<(), DbError> {
+    conn.execute(
+        "UPDATE job_runs SET stdout = ?2, stderr = ?3
+         WHERE id = ?1 AND status IN ('running', 'retrying')",
+        libsql::params![id, stdout, stderr],
+    )
+    .await?;
+    Ok(())
+}
+
 /// Get all running runs for a given task (for concurrency checks).
 #[allow(dead_code)]
 pub async fn get_running_runs_for_task(

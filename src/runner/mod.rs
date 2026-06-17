@@ -165,6 +165,35 @@ pub async fn run_task(task_id: &str, task_name: &str, db_path: &str) -> anyhow::
         task.command
     );
 
+    // Spawn a background consumer that persists the partial-output snapshots the
+    // executor emits while the command runs, so the dashboard streams output
+    // live instead of only showing it once the run finishes. Writes are guarded
+    // on status in the DB layer, so the runner's authoritative final write
+    // always wins regardless of ordering. The consumer ends when the senders
+    // drop (all attempts done) or the runner process exits.
+    let (progress_tx, mut progress_rx) =
+        tokio::sync::mpsc::channel::<crate::runner::executor::ProgressSnapshot>(8);
+    {
+        let consumer_db = database.clone();
+        let run_id = job_run.id.clone();
+        tokio::spawn(async move {
+            let conn = match consumer_db.connect().await {
+                Ok(c) => c,
+                Err(e) => {
+                    warn!("progress consumer: db connect failed: {e}");
+                    return;
+                }
+            };
+            while let Some((stdout, stderr)) = progress_rx.recv().await {
+                if let Err(e) =
+                    db::runs::update_job_run_output(&conn, &run_id, &stdout, &stderr).await
+                {
+                    warn!("progress consumer: output flush failed: {e}");
+                }
+            }
+        });
+    }
+
     // 5-8. Execute with retry loop
     let mut attempt = 1;
     loop {
@@ -175,7 +204,9 @@ pub async fn run_task(task_id: &str, task_name: &str, db_path: &str) -> anyhow::
             attempt
         );
 
-        let result = executor::execute_command(&task.command, task.timeout_secs).await;
+        let result =
+            executor::execute_command(&task.command, task.timeout_secs, Some(progress_tx.clone()))
+                .await;
 
         match result {
             Ok(cmd_result) => {

@@ -51,8 +51,9 @@ pub async fn execute_hooks(
             }
         };
 
-        // Execute the hook command
-        let result = executor::execute_command(&hook.command, hook.timeout_secs).await;
+        // Execute the hook command. Hooks are short-lived and surfaced in a
+        // table rather than the live terminal, so no progress streaming.
+        let result = executor::execute_command(&hook.command, hook.timeout_secs, None).await;
 
         let (status, exit_code, stdout, stderr) = match result {
             Ok(cmd_result) => {
