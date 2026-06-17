@@ -554,6 +554,90 @@ async fn t23_crud_tasks() {
 }
 
 #[tokio::test]
+async fn update_task_put_toggles_enabled() {
+    let (app, db_path, mock) = setup_app().await;
+    let token = login(&app).await;
+
+    // Created enabled and installed.
+    let id = create_enabled_task(&app, &token, "toggle-me").await;
+
+    // PUT enabled=false: persists disabled and stops/disables the timer.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(http::Method::PUT)
+                .uri(format!("/api/v1/tasks/{}", id))
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .header(http::header::AUTHORIZATION, auth_header(&token))
+                .body(Body::from(
+                    serde_json::to_string(&serde_json::json!({ "enabled": false })).unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let task: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(task["enabled"], serde_json::json!(false));
+
+    let calls = mock.get_calls();
+    assert!(
+        calls.contains(&"disable_timer:toggle-me".to_string()),
+        "expected disable_timer, got {:?}",
+        calls
+    );
+    assert!(
+        calls.contains(&"stop_timer:toggle-me".to_string()),
+        "expected stop_timer, got {:?}",
+        calls
+    );
+    let disable_idx = calls
+        .iter()
+        .position(|c| c == "disable_timer:toggle-me")
+        .unwrap();
+
+    // Persisted as disabled.
+    let fetched = get_json(&app, &token, &format!("/api/v1/tasks/{}", id)).await;
+    assert_eq!(fetched["enabled"], serde_json::json!(false));
+
+    // PUT enabled=true: re-installs (and thus re-enables) the timer.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(http::Method::PUT)
+                .uri(format!("/api/v1/tasks/{}", id))
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .header(http::header::AUTHORIZATION, auth_header(&token))
+                .body(Body::from(
+                    serde_json::to_string(&serde_json::json!({ "enabled": true })).unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let task: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(task["enabled"], serde_json::json!(true));
+
+    // The reinstall happened after the disable (i.e. it's from the re-enable,
+    // not the initial create).
+    assert!(
+        mock.get_calls()
+            .iter()
+            .skip(disable_idx)
+            .any(|c| c.starts_with("install_task:toggle-me")),
+        "expected install_task after re-enable, got {:?}",
+        mock.get_calls()
+    );
+
+    cleanup_db(&db_path);
+}
+
+#[tokio::test]
 async fn tasks_accept_and_persist_tags() {
     let (app, path, _mock) = setup_app().await;
     let token = login(&app).await;

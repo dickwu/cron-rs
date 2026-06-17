@@ -64,6 +64,7 @@ pub struct UpdateTaskRequest {
     pub retry_delay_secs: Option<i32>,
     pub timeout_secs: Option<i32>,
     pub concurrency_policy: Option<String>,
+    pub enabled: Option<bool>,
     #[serde(default)]
     lock_key: OptionalStringUpdate,
     #[serde(default)]
@@ -523,7 +524,7 @@ pub async fn update_task(
         schedule: body.schedule.unwrap_or(existing.schedule),
         tags: body.tags.map(normalize_tags).unwrap_or(existing.tags),
         description: body.description.unwrap_or(existing.description),
-        enabled: existing.enabled,
+        enabled: body.enabled.unwrap_or(existing.enabled),
         max_retries: body.max_retries.unwrap_or(existing.max_retries),
         retry_delay_secs: body.retry_delay_secs.unwrap_or(existing.retry_delay_secs),
         timeout_secs: body.timeout_secs.or(existing.timeout_secs),
@@ -560,16 +561,33 @@ pub async fn update_task(
         }
     };
 
-    // Reinstall systemd units if the task is enabled
+    // Sync systemd units to the (possibly changed) enabled state.
     let group_membership_changed =
         was_every_minute != unit_gen::is_every_minute_schedule(&saved.schedule);
     if saved.enabled {
-        // Remove old units (using old name if name changed)
+        // Enabled (or staying enabled with edits): reinstall fresh units.
+        // Remove old units first (using old name in case the task was renamed).
         let _ = state.systemd.remove_task(&existing.name).await;
         let stagger = stagger_second_for_task(&state, &saved.id).await;
         if let Err(e) = state.systemd.install_task(&saved, stagger).await {
             error!(
                 "Failed to reinstall systemd units for task '{}': {}",
+                saved.name, e
+            );
+        }
+    } else if existing.enabled {
+        // Transitioning enabled -> disabled: stop and disable the timer so it
+        // won't fire (mirrors disable_task). Operate on the old name in case
+        // this update also renamed the task.
+        if let Err(e) = state.systemd.disable_timer(&existing.name).await {
+            error!(
+                "Failed to disable systemd timer for task '{}': {}",
+                saved.name, e
+            );
+        }
+        if let Err(e) = state.systemd.stop_timer(&existing.name).await {
+            error!(
+                "Failed to stop systemd timer for task '{}': {}",
                 saved.name, e
             );
         }
