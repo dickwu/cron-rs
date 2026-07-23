@@ -48,6 +48,9 @@ impl SystemdManager for StubSystemd {
     async fn active_timer_names(&self) -> anyhow::Result<HashSet<String>> {
         Ok(HashSet::new())
     }
+    async fn validate_calendar(&self, _schedule: &str) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
 fn temp_db_path() -> PathBuf {

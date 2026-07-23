@@ -192,3 +192,40 @@ fn daemon_service_runs_daemon_with_bind_args() {
     assert!(content.contains("Restart=on-failure"));
     assert!(content.contains("WantedBy=default.target"));
 }
+
+// Systemctl::validate_calendar must agree with `systemd-analyze calendar`,
+// the authority on what OnCalendar= will accept.
+#[tokio::test]
+async fn validate_calendar_matches_systemd_analyze() {
+    use cron_rs::systemd::{Systemctl, SystemdManager};
+
+    // Skip on hosts without systemd (the real impl fails open there).
+    let available = std::process::Command::new("systemd-analyze")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !available {
+        eprintln!("systemd-analyze not available; skipping");
+        return;
+    }
+
+    let ctl = Systemctl {
+        unit_dir: std::env::temp_dir(),
+        binary_path: std::path::PathBuf::from("/usr/bin/true"),
+        db_path: String::new(),
+    };
+
+    ctl.validate_calendar("*-*-* *:0/2:00")
+        .await
+        .expect("every-2-minutes spec with '0/2' base must be accepted");
+
+    let err = ctl
+        .validate_calendar("*-*-* *:*/2:00")
+        .await
+        .expect_err("'*/2' (step with '*' base) is rejected by systemd and must fail validation");
+    assert!(
+        format!("{err:#}").to_lowercase().contains("calendar"),
+        "error should carry the systemd-analyze diagnostic, got: {err:#}"
+    );
+}

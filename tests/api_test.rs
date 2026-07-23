@@ -18,14 +18,13 @@ use cron_rs::systemd::SystemdManager;
 struct MockSystemdManager {
     calls: Arc<Mutex<Vec<String>>>,
     active_timers: Arc<Mutex<std::collections::HashSet<String>>>,
+    invalid_schedules: Arc<Mutex<std::collections::HashSet<String>>>,
+    install_failure: Arc<Mutex<Option<String>>>,
 }
 
 impl MockSystemdManager {
     fn new() -> Self {
-        Self {
-            calls: Arc::new(Mutex::new(Vec::new())),
-            active_timers: Arc::new(Mutex::new(std::collections::HashSet::new())),
-        }
+        Self::default()
     }
 
     fn get_calls(&self) -> Vec<String> {
@@ -37,6 +36,19 @@ impl MockSystemdManager {
             .lock()
             .unwrap()
             .insert(unit_name.to_string());
+    }
+
+    /// Make validate_calendar reject this exact schedule string.
+    fn set_schedule_invalid(&self, schedule: &str) {
+        self.invalid_schedules
+            .lock()
+            .unwrap()
+            .insert(schedule.to_string());
+    }
+
+    /// Make install_task fail with the given message.
+    fn set_install_failure(&self, msg: &str) {
+        *self.install_failure.lock().unwrap() = Some(msg.to_string());
     }
 }
 
@@ -50,6 +62,9 @@ impl SystemdManager for MockSystemdManager {
             .lock()
             .unwrap()
             .push(format!("install_task:{}{}", task.name, suffix));
+        if let Some(msg) = self.install_failure.lock().unwrap().clone() {
+            anyhow::bail!("{}", msg);
+        }
         Ok(())
     }
 
@@ -104,6 +119,20 @@ impl SystemdManager for MockSystemdManager {
             .unwrap()
             .push("active_timer_names".to_string());
         Ok(self.active_timers.lock().unwrap().clone())
+    }
+
+    async fn validate_calendar(&self, schedule: &str) -> anyhow::Result<()> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push(format!("validate_calendar:{}", schedule));
+        if self.invalid_schedules.lock().unwrap().contains(schedule) {
+            anyhow::bail!(
+                "Failed to parse calendar specification '{}': Invalid argument",
+                schedule
+            );
+        }
+        Ok(())
     }
 }
 
@@ -1672,6 +1701,353 @@ async fn every_minute_tasks_get_distinct_stagger_seconds() {
         calls.contains(&"install_task:hourly-c".to_string()),
         "hourly task should install without a stagger second. Calls: {:?}",
         calls
+    );
+
+    cleanup_db(&path);
+}
+
+// --- Schedule validation & systemd failure surfacing ---
+
+/// POST /tasks with a schedule systemd cannot parse must be rejected up
+/// front: 400, nothing persisted, nothing installed.
+#[tokio::test]
+async fn create_task_rejects_invalid_schedule() {
+    let (app, path, mock) = setup_app().await;
+    let token = login(&app).await;
+    mock.set_schedule_invalid("*-*-* *:*/2:00");
+
+    let body = serde_json::json!({
+        "name": "bad-schedule-task",
+        "command": "echo hello",
+        "schedule": "*-*-* *:*/2:00"
+    });
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(http::Method::POST)
+                .uri("/api/v1/tasks")
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .header(http::header::AUTHORIZATION, auth_header(&token))
+                .body(Body::from(serde_json::to_string(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let error = json["error"].as_str().unwrap_or_default();
+    assert!(
+        error.contains("invalid schedule"),
+        "error should say the schedule is invalid, got: {}",
+        error
+    );
+
+    // Nothing persisted, nothing installed.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(http::Method::GET)
+                .uri("/api/v1/tasks")
+                .header(http::header::AUTHORIZATION, auth_header(&token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let tasks: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(tasks.as_array().unwrap().len(), 0, "task must not be saved");
+    assert!(
+        !mock
+            .get_calls()
+            .iter()
+            .any(|c| c.starts_with("install_task:")),
+        "install_task must not be called for a rejected schedule"
+    );
+
+    cleanup_db(&path);
+}
+
+/// PUT /tasks/:id with an invalid schedule must be rejected and leave the
+/// stored task untouched.
+#[tokio::test]
+async fn update_task_rejects_invalid_schedule() {
+    let (app, path, mock) = setup_app().await;
+    let token = login(&app).await;
+    mock.set_schedule_invalid("*-*-* *:*/2:00");
+
+    let body = serde_json::json!({
+        "name": "sync-task",
+        "command": "echo hello",
+        "schedule": "*-*-* 02:00:00"
+    });
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(http::Method::POST)
+                .uri("/api/v1/tasks")
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .header(http::header::AUTHORIZATION, auth_header(&token))
+                .body(Body::from(serde_json::to_string(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let created: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let id = created["id"].as_str().unwrap().to_string();
+
+    let update = serde_json::json!({ "schedule": "*-*-* *:*/2:00" });
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(http::Method::PUT)
+                .uri(format!("/api/v1/tasks/{}", id))
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .header(http::header::AUTHORIZATION, auth_header(&token))
+                .body(Body::from(serde_json::to_string(&update).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(
+        json["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("invalid schedule"),
+        "error should say the schedule is invalid, got: {}",
+        json["error"]
+    );
+
+    // Stored schedule unchanged.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(http::Method::GET)
+                .uri(format!("/api/v1/tasks/{}", id))
+                .header(http::header::AUTHORIZATION, auth_header(&token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let task: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(task["schedule"], serde_json::json!("*-*-* 02:00:00"));
+
+    cleanup_db(&path);
+}
+
+/// When systemd unit installation fails on create, the client must be told
+/// (500 with a message) instead of a silent 201.
+#[tokio::test]
+async fn create_task_surfaces_systemd_install_failure() {
+    let (app, path, mock) = setup_app().await;
+    let token = login(&app).await;
+    mock.set_install_failure("simulated systemctl failure");
+
+    let body = serde_json::json!({
+        "name": "install-fails",
+        "command": "echo hello",
+        "schedule": "*-*-* 02:00:00"
+    });
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(http::Method::POST)
+                .uri("/api/v1/tasks")
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .header(http::header::AUTHORIZATION, auth_header(&token))
+                .body(Body::from(serde_json::to_string(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let error = json["error"].as_str().unwrap_or_default();
+    assert!(
+        error.contains("systemd") && error.contains("simulated systemctl failure"),
+        "error should describe the systemd failure, got: {}",
+        error
+    );
+
+    // The task row itself was saved; the error is about scheduling only.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(http::Method::GET)
+                .uri("/api/v1/tasks")
+                .header(http::header::AUTHORIZATION, auth_header(&token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let tasks: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(tasks.as_array().unwrap().len(), 1);
+
+    cleanup_db(&path);
+}
+
+/// When systemd unit reinstall fails on update, the client must be told
+/// (500 with a message) instead of a silent 200.
+#[tokio::test]
+async fn update_task_surfaces_systemd_install_failure() {
+    let (app, path, mock) = setup_app().await;
+    let token = login(&app).await;
+
+    let body = serde_json::json!({
+        "name": "update-install-fails",
+        "command": "echo hello",
+        "schedule": "*-*-* 02:00:00"
+    });
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(http::Method::POST)
+                .uri("/api/v1/tasks")
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .header(http::header::AUTHORIZATION, auth_header(&token))
+                .body(Body::from(serde_json::to_string(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let created: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let id = created["id"].as_str().unwrap().to_string();
+
+    mock.set_install_failure("simulated systemctl failure");
+    let update = serde_json::json!({ "command": "echo updated" });
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(http::Method::PUT)
+                .uri(format!("/api/v1/tasks/{}", id))
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .header(http::header::AUTHORIZATION, auth_header(&token))
+                .body(Body::from(serde_json::to_string(&update).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let error = json["error"].as_str().unwrap_or_default();
+    assert!(
+        error.contains("systemd") && error.contains("simulated systemctl failure"),
+        "error should describe the systemd failure, got: {}",
+        error
+    );
+
+    // The DB update itself went through.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(http::Method::GET)
+                .uri(format!("/api/v1/tasks/{}", id))
+                .header(http::header::AUTHORIZATION, auth_header(&token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let task: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(task["command"], serde_json::json!("echo updated"));
+
+    cleanup_db(&path);
+}
+
+/// When systemd install fails on enable, the client must be told (500).
+#[tokio::test]
+async fn enable_task_surfaces_systemd_install_failure() {
+    let (app, path, mock) = setup_app().await;
+    let token = login(&app).await;
+
+    let body = serde_json::json!({
+        "name": "enable-install-fails",
+        "command": "echo hello",
+        "schedule": "*-*-* 02:00:00"
+    });
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(http::Method::POST)
+                .uri("/api/v1/tasks")
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .header(http::header::AUTHORIZATION, auth_header(&token))
+                .body(Body::from(serde_json::to_string(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let created: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let id = created["id"].as_str().unwrap().to_string();
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(http::Method::POST)
+                .uri(format!("/api/v1/tasks/{}/disable", id))
+                .header(http::header::AUTHORIZATION, auth_header(&token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    mock.set_install_failure("simulated systemctl failure");
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(http::Method::POST)
+                .uri(format!("/api/v1/tasks/{}/enable", id))
+                .header(http::header::AUTHORIZATION, auth_header(&token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let error = json["error"].as_str().unwrap_or_default();
+    assert!(
+        error.contains("systemd") && error.contains("simulated systemctl failure"),
+        "error should describe the systemd failure, got: {}",
+        error
     );
 
     cleanup_db(&path);

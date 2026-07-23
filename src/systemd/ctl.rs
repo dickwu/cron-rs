@@ -240,6 +240,41 @@ impl SystemdManager for Systemctl {
         Ok(output.status.success())
     }
 
+    async fn validate_calendar(&self, schedule: &str) -> Result<()> {
+        // Validate what will actually be rendered into OnCalendar=, i.e.
+        // with any CRON_RS_TIMEZONE suffix applied.
+        let rendered = unit_gen::apply_timezone(schedule);
+        let output = match Command::new("systemd-analyze")
+            .arg("calendar")
+            .arg("--")
+            .arg(&rendered)
+            .output()
+            .await
+        {
+            Ok(output) => output,
+            Err(e) => {
+                // Fail open: hosts without systemd-analyze can still manage
+                // tasks; systemd itself remains the backstop at install time.
+                warn!("cannot run systemd-analyze to validate schedule: {}", e);
+                return Ok(());
+            }
+        };
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let reason = match stderr.trim() {
+                "" => "not a valid calendar expression",
+                s => s,
+            };
+            anyhow::bail!(
+                "systemd rejects calendar expression '{}': {}",
+                rendered,
+                reason
+            );
+        }
+        Ok(())
+    }
+
     async fn active_timer_names(&self) -> Result<std::collections::HashSet<String>> {
         let output = self
             .run_systemctl_no_fail(&[

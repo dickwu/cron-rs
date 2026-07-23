@@ -308,6 +308,16 @@ pub async fn create_task(
     State(state): State<AppState>,
     Json(body): Json<CreateTaskRequest>,
 ) -> impl IntoResponse {
+    // Reject schedules systemd cannot parse before anything is persisted;
+    // otherwise the task would be saved with a timer that can never fire.
+    if let Err(e) = state.systemd.validate_calendar(&body.schedule).await {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": format!("invalid schedule: {:#}", e)})),
+        )
+            .into_response();
+    }
+
     let concurrency_policy = match &body.concurrency_policy {
         Some(cp) => match cp.parse::<ConcurrencyPolicy>() {
             Ok(p) => p,
@@ -372,8 +382,16 @@ pub async fn create_task(
                 "Failed to install systemd units for task '{}': {}",
                 created.name, e
             );
-            // Task was created in DB but systemd install failed. Return the task
-            // but log the error. Don't fail the request.
+            // The task row exists, but its timer is not scheduled — that must
+            // be visible to the caller, not a silent 201.
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": format!(
+                    "Task '{}' was created, but installing its systemd units failed: {:#}",
+                    created.name, e
+                )})),
+            )
+                .into_response();
         }
     }
 
@@ -483,6 +501,17 @@ pub async fn update_task(
     Path(id): Path<String>,
     Json(body): Json<UpdateTaskRequest>,
 ) -> impl IntoResponse {
+    // Reject schedules systemd cannot parse before touching the DB.
+    if let Some(schedule) = &body.schedule {
+        if let Err(e) = state.systemd.validate_calendar(schedule).await {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": format!("invalid schedule: {:#}", e)})),
+            )
+                .into_response();
+        }
+    }
+
     let conn = match state.db.connect().await {
         Ok(c) => c,
         Err(e) => {
@@ -574,6 +603,16 @@ pub async fn update_task(
                 "Failed to reinstall systemd units for task '{}': {}",
                 saved.name, e
             );
+            // The DB update went through, but the timer is not scheduled —
+            // report it instead of pretending the update fully succeeded.
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": format!(
+                    "Task '{}' was updated, but installing its systemd units failed: {:#}",
+                    saved.name, e
+                )})),
+            )
+                .into_response();
         }
     } else if existing.enabled {
         // Transitioning enabled -> disabled: stop and disable the timer so it
@@ -695,6 +734,14 @@ pub async fn enable_task(
             "Failed to enable systemd timer for task '{}': {}",
             saved.name, e
         );
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": format!(
+                "Task '{}' was enabled, but installing its systemd units failed: {:#}",
+                saved.name, e
+            )})),
+        )
+            .into_response();
     }
 
     info!("Enabled task '{}' (id: {})", saved.name, saved.id);

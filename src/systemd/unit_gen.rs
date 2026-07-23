@@ -245,7 +245,7 @@ fn apply_timezone_with(schedule: &str, tz: &str) -> String {
 }
 
 /// Convenience wrapper that reads `CRON_RS_TIMEZONE` from the environment.
-fn apply_timezone(schedule: &str) -> String {
+pub(crate) fn apply_timezone(schedule: &str) -> String {
     let tz = std::env::var("CRON_RS_TIMEZONE").unwrap_or_default();
     apply_timezone_with(schedule, &tz)
 }

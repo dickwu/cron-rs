@@ -29,4 +29,8 @@ pub trait SystemdManager: Send + Sync {
     /// Unit names (`cron-rs-<task>.timer`) of all currently active cron-rs
     /// timers, fetched with a single systemctl invocation.
     async fn active_timer_names(&self) -> anyhow::Result<std::collections::HashSet<String>>;
+    /// Validate an OnCalendar expression as it will be rendered into a timer
+    /// unit (including any `CRON_RS_TIMEZONE` suffix). Err carries a
+    /// human-readable reason when systemd would reject the expression.
+    async fn validate_calendar(&self, schedule: &str) -> anyhow::Result<()>;
 }
